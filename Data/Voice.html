@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Speech to Text Recognition</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        #output { margin-top: 20px; padding: 15px; border: 1px solid #ccc; min-height: 50px; background-color: #f9f9f9; }
+        .listening { background-color: #e8f5e8; }
+        .status { color: #666; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h2>Speech to Text System</h2>
+    <button id="start" onclick="startRecognition()">🎤 Start Listening</button>
+    <button id="end" onclick="stopRecognition()" disabled>⏹️ Stop Listening</button>
+    <div id="output"><div class="status">Click 'Start Listening' to begin speech recognition...</div></div>
+    
+    <script>
+        const output = document.getElementById('output');
+        const startBtn = document.getElementById('start');
+        const endBtn = document.getElementById('end');
+        let recognition;
+        let isListening = false;
+
+        function startRecognition() {
+            if (isListening) return;
+            
+            // Initialize speech recognition
+            recognition = new webkitSpeechRecognition() || new SpeechRecognition();
+            recognition.lang = 'en';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onstart = function() {
+                isListening = true;
+                startBtn.disabled = true;
+                endBtn.disabled = false;
+                output.innerHTML = "<div class='status'>🎤 Listening... Speak now!</div>";
+                document.body.classList.add('listening');
+            };
+
+            recognition.onresult = function(event) {
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    }
+                }
+                if (finalTranscript) {
+                    output.innerHTML = finalTranscript;
+                }
+            };
+
+            recognition.onerror = function(event) {
+                console.log('Speech recognition error:', event.error);
+                if (event.error === 'not-allowed') {
+                    output.innerHTML = "<div class='status'>❌ Microphone access denied. Please allow microphone permissions.</div>";
+                }
+            };
+
+            recognition.onend = function() {
+                isListening = false;
+                startBtn.disabled = false;
+                endBtn.disabled = true;
+                document.body.classList.remove('listening');
+                if (output.textContent === '🎤 Listening... Speak now!' || output.textContent.includes('Listening')) {
+                    output.innerHTML = "<div class='status'>Ready to listen. Click 'Start Listening' again.</div>";
+                }
+            };
+
+            recognition.start();
+        }
+
+        function stopRecognition() {
+            if (recognition && isListening) {
+                recognition.stop();
+            }
+            startBtn.disabled = false;
+            endBtn.disabled = true;
+            document.body.classList.remove('listening');
+        }
+    </script>
+</body>
+</html>
