@@ -1,0 +1,13 @@
+module Kraken
+
+singleton Theme 1.0 Theme.qml
+
+AmbientBackground 1.0 AmbientBackground.qml
+GlassPanel 1.0 GlassPanel.qml
+GlowButton 1.0 GlowButton.qml
+Sidebar 1.0 Sidebar.qml
+TopBar 1.0 TopBar.qml
+StatusBar 1.0 StatusBar.qml
+AIOrb 1.0 AIOrb.qml
+CommandCenter 1.0 CommandCenter.qml
+ChatView 1.0 ChatView.qml
