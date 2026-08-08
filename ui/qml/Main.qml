@@ -1,4 +1,3 @@
-
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -27,12 +26,6 @@ ApplicationWindow {
     // ==========================================================
 
     property string aiState: "idle"
-
-    // ==========================================================
-    // STREAMING STATE
-    // ==========================================================
-
-    property int streamStep: 0
 
     // ==========================================================
     // AMBIENT BACKGROUND
@@ -107,10 +100,10 @@ ApplicationWindow {
 
                 Layout.fillHeight: true
 
-                spacing: 24
+                spacing: 18
 
                 // ==================================================
-                // AI CORE AREA
+                // AI CORE
                 // ==================================================
 
                 Item {
@@ -120,10 +113,6 @@ ApplicationWindow {
                     Layout.fillHeight: true
 
                     Layout.minimumWidth: 600
-
-                    // ----------------------------------------------
-                    // CENTER ORB
-                    // ----------------------------------------------
 
                     AIOrb {
 
@@ -137,10 +126,6 @@ ApplicationWindow {
 
                         state: window.aiState
                     }
-
-                    // ----------------------------------------------
-                    // STATE LABEL
-                    // ----------------------------------------------
 
                     Text {
 
@@ -189,11 +174,11 @@ ApplicationWindow {
                             case "processing":
                                 return Theme.warning
 
-                            case "error":
-                                return Theme.danger
-
                             case "speaking":
                                 return Theme.accent
+
+                            case "error":
+                                return Theme.danger
 
                             default:
                                 return Theme.accent
@@ -236,13 +221,9 @@ ApplicationWindow {
 
                         state: window.aiState
 
-                        // ------------------------------------------
-                        // STREAMING FINISHED
-                        // ------------------------------------------
+                        onClearRequested: {
 
-                        onStreamingFinished: {
-
-                            window.aiState = "idle"
+                            assistantBridge.clearConversation()
                         }
                     }
                 }
@@ -259,10 +240,6 @@ ApplicationWindow {
 
             Layout.preferredHeight: 108
 
-            // --------------------------------------------------
-            // TOP SEPARATOR
-            // --------------------------------------------------
-
             Rectangle {
 
                 anchors.top: parent.top
@@ -277,10 +254,6 @@ ApplicationWindow {
 
                 opacity: 0.65
             }
-
-            // --------------------------------------------------
-            // COMMAND CENTER
-            // --------------------------------------------------
 
             CommandCenter {
 
@@ -299,23 +272,28 @@ ApplicationWindow {
 
                 onCommandSubmitted: function(command) {
 
-                    // ------------------------------------------
-                    // Add user message
-                    // ------------------------------------------
+                    if (
+                        !command ||
+                        command.trim().length === 0
+                    ) {
+                        return
+                    }
 
-                    chatView.addUserMessage(command)
+                    // ------------------------------------------------
+                    // Display user message immediately.
+                    // ------------------------------------------------
 
-                    // ------------------------------------------
-                    // Move AI into thinking state
-                    // ------------------------------------------
+                    chatView.addUserMessage(
+                        command.trim()
+                    )
 
-                    window.aiState = "thinking"
+                    // ------------------------------------------------
+                    // Send to Python backend.
+                    // ------------------------------------------------
 
-                    // ------------------------------------------
-                    // Start temporary response simulation
-                    // ------------------------------------------
-
-                    responseTimer.restart()
+                    assistantBridge.sendMessage(
+                        command.trim()
+                    )
                 }
             }
         }
@@ -333,120 +311,91 @@ ApplicationWindow {
     }
 
     // ==========================================================
-    // TEMPORARY THINKING DELAY
-    //
-    // This will later be replaced by the Python EventBus.
+    // ASSISTANT BRIDGE CONNECTIONS
     // ==========================================================
 
-    Timer {
+    Connections {
 
-        id: responseTimer
+        target: assistantBridge
 
-        interval: 1000
+        // ======================================================
+        // STATE
+        // ======================================================
 
-        repeat: false
+        function onStateChanged(state) {
 
-        onTriggered: {
+            console.log(
+                "QML AI STATE:",
+                state
+            )
 
-            // ----------------------------------------------
-            // Move AI into speaking mode
-            // ----------------------------------------------
+            window.aiState = state
 
-            window.aiState = "speaking"
+            chatView.state = state
+        }
 
-            // ----------------------------------------------
-            // Create empty assistant message
-            // ----------------------------------------------
+        // ======================================================
+        // RESPONSE STARTED
+        // ======================================================
+
+        function onResponseStarted() {
+
+            console.log(
+                "QML RESPONSE STARTED"
+            )
 
             chatView.startStreaming()
-
-            // ----------------------------------------------
-            // Reset stream
-            // ----------------------------------------------
-
-            window.streamStep = 0
-
-            // ----------------------------------------------
-            // Start simulated token stream
-            // ----------------------------------------------
-
-            streamTimer.start()
         }
-    }
 
-    // ==========================================================
-    // TEMPORARY STREAM SIMULATOR
-    //
-    // Simulates an AI response arriving token-by-token.
-    //
-    // Later Python will replace this completely.
-    // ==========================================================
+        // ======================================================
+        // RESPONSE CHUNK
+        // ======================================================
 
-    Timer {
-
-        id: streamTimer
-
-        interval: 55
-
-        repeat: true
-
-        onTriggered: {
-
-            var chunks = [
-
-                "Command ",
-                "received. ",
-                "Krakken ",
-                "is ",
-                "processing ",
-                "your ",
-                "request."
-            ]
-
-            // ----------------------------------------------
-            // Send next chunk
-            // ----------------------------------------------
+        function onResponseChunk(chunk) {
 
             if (
-                window.streamStep <
-                chunks.length
+                !chunk ||
+                chunk.length === 0
             ) {
-
-                chatView.appendStreamText(
-                    chunks[window.streamStep]
-                )
-
-                window.streamStep++
-
                 return
             }
 
-            // ----------------------------------------------
-            // Streaming completed
-            // ----------------------------------------------
+            chatView.appendStreamText(
+                chunk
+            )
+        }
 
-            streamTimer.stop()
+        // ======================================================
+        // RESPONSE FINISHED
+        // ======================================================
 
-            window.streamStep = 0
+        function onResponseFinished() {
+
+            console.log(
+                "QML RESPONSE FINISHED"
+            )
 
             chatView.finishStreaming()
+        }
 
-            // onStreamingFinished in ChatView
-            // returns the AI to idle.
+        // ======================================================
+        // ERROR
+        // ======================================================
+
+        function onErrorOccurred(errorMessage) {
+
+            console.error(
+                "KRAKKEN ERROR:",
+                errorMessage
+            )
+
+            chatView.cancelStreaming()
+
+            chatView.addAssistantMessage(
+                "Error: " + errorMessage
+            )
+
+            window.aiState = "error"
         }
     }
-
-    // ==========================================================
-    // WINDOW CLOSE SAFETY
-    // ==========================================================
-
-    onClosing: function(close) {
-
-        responseTimer.stop()
-
-        streamTimer.stop()
-
-        close.accepted = true
-    }
 }
-

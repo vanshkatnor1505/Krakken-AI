@@ -2,11 +2,11 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
 import Kraken
 
 Item {
-
     id: root
 
     // ==========================================================
@@ -16,19 +16,30 @@ Item {
     property string state: "idle"
 
     property bool showHeader: true
-
     property bool showTimestamps: true
-
     property bool autoScroll: true
 
     property int maxMessages: 200
 
+    // Focus mode.
+    // This is intentionally NOT desktop fullscreen.
+    property bool fullscreen: false
+
+    // Backend bridge.
+    //
+    // Main.qml should assign:
+    //
+    // assistantBridge: assistantBridge
+    //
+    property var assistantBridge: null
+
+    // AI-generated highlights.
+    property bool showHighlights: true
+    property string currentHighlights: ""
+
     signal messageSent(string message)
-
     signal clearRequested()
-
     signal streamingStarted()
-
     signal streamingFinished()
 
     // ==========================================================
@@ -43,7 +54,6 @@ Item {
     // ==========================================================
 
     property color stateColor: {
-
         switch (root.state) {
 
         case "listening":
@@ -67,11 +77,10 @@ Item {
     }
 
     // ==========================================================
-    // STREAMING STATE
+    // STREAMING
     // ==========================================================
 
     property bool streaming: false
-
     property int streamingIndex: -1
 
     // ==========================================================
@@ -79,55 +88,201 @@ Item {
     // ==========================================================
 
     ListModel {
-
         id: messageModel
     }
 
     // ==========================================================
-    // MAIN CHAT SURFACE
+    // ASSISTANT BRIDGE CONNECTION
+    //
+    // Python:
+    //
+    // AssistantBridge
+    //      ↓
+    // Qt signals
+    //      ↓
+    // Connections
+    //      ↓
+    // ChatView
+    //
+    // ==========================================================
+
+    Connections {
+        id: assistantConnections
+
+        target: root.assistantBridge
+
+        // ------------------------------------------------------
+        // BACKEND STATE
+        // ------------------------------------------------------
+
+        function onStateChanged(state) {
+
+            if (!state)
+                return
+
+            root.state = state
+        }
+
+        // ------------------------------------------------------
+        // RESPONSE STARTED
+        // ------------------------------------------------------
+
+        function onResponseStarted() {
+
+            root.startStreaming()
+        }
+
+        // ------------------------------------------------------
+        // RESPONSE CHUNK
+        // ------------------------------------------------------
+
+        function onResponseChunk(chunk) {
+
+            if (!chunk)
+                return
+
+            root.appendStreamText(
+                chunk
+            )
+        }
+
+        // ------------------------------------------------------
+        // RESPONSE FINISHED
+        // ------------------------------------------------------
+
+        function onResponseFinished() {
+
+            root.finishStreaming()
+        }
+
+        // ------------------------------------------------------
+        // BACKEND ERROR
+        // ------------------------------------------------------
+
+        function onErrorOccurred(error) {
+
+            root.cancelStreaming()
+
+            root.state = "error"
+
+            if (
+                error &&
+                error.length > 0
+            ) {
+
+                root.addAssistantMessage(
+                    "Error: " + error
+                )
+            }
+        }
+    }
+
+    // ==========================================================
+    // FOCUS MODE WINDOW
+    //
+    // Separate non-modal window.
+    //
+    // Main Kraken window remains usable.
+    // This is NOT desktop fullscreen.
+    // ==========================================================
+
+    Window {
+        id: focusWindow
+
+        visible: false
+
+        width: 1100
+        height: 720
+
+        minimumWidth: 800
+        minimumHeight: 500
+
+        title: "KRAKKEN — Focus Mode"
+
+        flags:
+            Qt.Window |
+            Qt.WindowTitleHint |
+            Qt.WindowSystemMenuHint |
+            Qt.WindowMinimizeButtonHint |
+            Qt.WindowMaximizeButtonHint |
+            Qt.WindowCloseButtonHint
+
+        color: Qt.rgba(
+            0.025,
+            0.04,
+            0.07,
+            1.0
+        )
+
+        modality: Qt.NonModal
+
+        onClosing: function(close) {
+
+            close.accepted = true
+
+            root.exitFullscreen()
+        }
+
+        Rectangle {
+            anchors.fill: parent
+
+            color: Qt.rgba(
+                0.025,
+                0.04,
+                0.07,
+                1.0
+            )
+        }
+    }
+
+    // ==========================================================
+    // MAIN CHAT PANEL
     // ==========================================================
 
     Rectangle {
-
         id: panel
 
         anchors.fill: parent
 
-        radius: Theme.radiusLarge
+        radius:
+            root.fullscreen
+            ? 16
+            : Theme.radiusLarge
 
         color: Qt.rgba(
             0.04,
             0.07,
             0.12,
-            0.62
+            0.94
         )
 
         border.width: 1
 
-        border.color: Qt.rgba(
-            1,
-            1,
-            1,
-            0.055
-        )
+        border.color:
+            Qt.rgba(
+                1,
+                1,
+                1,
+                0.055
+            )
 
         // ======================================================
         // HEADER
         // ======================================================
 
         Rectangle {
-
             id: header
 
             visible: root.showHeader
 
             anchors.top: parent.top
-
             anchors.left: parent.left
-
             anchors.right: parent.right
 
-            height: 58
+            height:
+                root.fullscreen
+                ? 68
+                : 58
 
             color: "transparent"
 
@@ -135,18 +290,28 @@ Item {
 
                 anchors.fill: parent
 
-                anchors.leftMargin: 24
+                anchors.leftMargin:
+                    root.fullscreen
+                    ? 28
+                    : 24
 
-                anchors.rightMargin: 18
+                anchors.rightMargin:
+                    root.fullscreen
+                    ? 22
+                    : 18
 
-                spacing: 11
+                spacing: 12
+
+                // --------------------------------------------------
+                // STATUS DOT
+                // --------------------------------------------------
 
                 Rectangle {
 
-                    Layout.alignment: Qt.AlignVCenter
+                    Layout.alignment:
+                        Qt.AlignVCenter
 
                     width: 7
-
                     height: 7
 
                     radius: 3.5
@@ -162,24 +327,22 @@ Item {
                             Animation.Infinite
 
                         NumberAnimation {
-
                             from: 0.35
-
                             to: 1
-
                             duration: 650
                         }
 
                         NumberAnimation {
-
                             from: 1
-
                             to: 0.35
-
                             duration: 650
                         }
                     }
                 }
+
+                // --------------------------------------------------
+                // TITLE
+                // --------------------------------------------------
 
                 ColumnLayout {
 
@@ -191,9 +354,13 @@ Item {
 
                         text: "KRAKKEN"
 
-                        color: Theme.textPrimary
+                        color:
+                            Theme.textPrimary
 
-                        font.pixelSize: 13
+                        font.pixelSize:
+                            root.fullscreen
+                            ? 15
+                            : 13
 
                         font.bold: true
 
@@ -202,9 +369,14 @@ Item {
 
                     Text {
 
-                        text: stateDescription()
+                        text:
+                            root.fullscreen
+                            ? "FOCUS MODE • "
+                              + stateDescription()
+                            : stateDescription()
 
-                        color: root.stateColor
+                        color:
+                            root.stateColor
 
                         font.pixelSize: 8
 
@@ -216,15 +388,21 @@ Item {
                     }
                 }
 
+                // --------------------------------------------------
+                // MESSAGE COUNT
+                // --------------------------------------------------
+
                 Text {
 
-                    Layout.alignment: Qt.AlignVCenter
+                    Layout.alignment:
+                        Qt.AlignVCenter
 
                     text:
                         messageModel.count
                         + " MESSAGES"
 
-                    color: Theme.textSecondary
+                    color:
+                        Theme.textSecondary
 
                     font.pixelSize: 8
 
@@ -233,12 +411,83 @@ Item {
                     opacity: 0.55
                 }
 
+                // --------------------------------------------------
+                // FOCUS MODE BUTTON
+                // --------------------------------------------------
+
                 Rectangle {
 
-                    Layout.alignment: Qt.AlignVCenter
+                    Layout.alignment:
+                        Qt.AlignVCenter
+
+                    width: 34
+                    height: 34
+
+                    radius: 9
+
+                    color:
+                        fullscreenMouse.containsMouse
+                        ? Qt.rgba(
+                            1,
+                            1,
+                            1,
+                            0.07
+                        )
+                        : "transparent"
+
+                    Text {
+
+                        anchors.centerIn: parent
+
+                        text:
+                            root.fullscreen
+                            ? "⤢"
+                            : "⛶"
+
+                        color:
+                            Theme.textSecondary
+
+                        font.pixelSize: 17
+
+                        opacity: 0.75
+                    }
+
+                    MouseArea {
+
+                        id: fullscreenMouse
+
+                        anchors.fill: parent
+
+                        hoverEnabled: true
+
+                        cursorShape:
+                            Qt.PointingHandCursor
+
+                        onClicked: {
+
+                            root.toggleFullscreen()
+                        }
+                    }
+
+                    ToolTip.visible:
+                        fullscreenMouse.containsMouse
+
+                    ToolTip.text:
+                        root.fullscreen
+                        ? "Return to normal chat"
+                        : "Open Focus Mode"
+                }
+
+                // --------------------------------------------------
+                // CLEAR BUTTON
+                // --------------------------------------------------
+
+                Rectangle {
+
+                    Layout.alignment:
+                        Qt.AlignVCenter
 
                     width: 30
-
                     height: 30
 
                     radius: 9
@@ -253,21 +502,14 @@ Item {
                         )
                         : "transparent"
 
-                    Behavior on color {
-
-                        ColorAnimation {
-
-                            duration: Theme.fast
-                        }
-                    }
-
                     Text {
 
                         anchors.centerIn: parent
 
                         text: "×"
 
-                        color: Theme.textSecondary
+                        color:
+                            Theme.textSecondary
 
                         font.pixelSize: 18
 
@@ -287,35 +529,40 @@ Item {
 
                         onClicked: {
 
-                            messageModel.clear()
+                            root.clearMessages()
 
                             root.clearRequested()
                         }
                     }
+
+                    ToolTip.visible:
+                        clearMouse.containsMouse
+
+                    ToolTip.text:
+                        "Clear conversation"
                 }
             }
 
             Rectangle {
 
                 anchors.left: parent.left
-
                 anchors.right: parent.right
-
                 anchors.bottom: parent.bottom
 
                 height: 1
 
-                color: Qt.rgba(
-                    1,
-                    1,
-                    1,
-                    0.035
-                )
+                color:
+                    Qt.rgba(
+                        1,
+                        1,
+                        1,
+                        0.035
+                    )
             }
         }
 
         // ======================================================
-        // MESSAGE STREAM
+        // MESSAGE LIST
         // ======================================================
 
         ListView {
@@ -323,7 +570,6 @@ Item {
             id: messageList
 
             anchors.left: parent.left
-
             anchors.right: parent.right
 
             anchors.top:
@@ -333,27 +579,47 @@ Item {
 
             anchors.bottom: parent.bottom
 
-            anchors.leftMargin: 22
+            anchors.leftMargin:
+                root.fullscreen
+                ? 42
+                : 22
 
-            anchors.rightMargin: 18
+            anchors.rightMargin:
+                root.fullscreen
+                ? 42
+                : 18
 
-            anchors.topMargin: 14
+            anchors.topMargin:
+                root.fullscreen
+                ? 22
+                : 14
 
-            anchors.bottomMargin: 16
+            anchors.bottomMargin:
+                root.fullscreen
+                ? 28
+                : 16
 
             clip: true
 
             model: messageModel
 
-            spacing: 18
+            spacing:
+                root.fullscreen
+                ? 22
+                : 18
 
             boundsBehavior:
                 Flickable.StopAtBounds
 
-            ScrollBar.vertical: ScrollBar {
+            ScrollBar.vertical:
+                ScrollBar {
+                    policy:
+                        ScrollBar.AsNeeded
+                }
 
-                policy: ScrollBar.AsNeeded
-            }
+            // ==================================================
+            // EMPTY STATE
+            // ==================================================
 
             Text {
 
@@ -362,9 +628,11 @@ Item {
                 visible:
                     messageModel.count === 0
 
-                text: "AWAITING COMMAND"
+                text:
+                    "AWAITING COMMAND"
 
-                color: Theme.textSecondary
+                color:
+                    Theme.textSecondary
 
                 opacity: 0.28
 
@@ -383,7 +651,8 @@ Item {
 
                 id: messageDelegate
 
-                width: messageList.width
+                width:
+                    messageList.width
 
                 height:
                     messageContent.height + 12
@@ -391,23 +660,24 @@ Item {
                 property bool isUser:
                     role === "user"
 
-                property color accent:
-                    isUser
-                    ? Theme.accent
-                    : root.stateColor
-
                 property real maximumBubbleWidth:
-                    messageList.width * 0.82
+                    messageList.width *
+                    (
+                        root.fullscreen
+                        ? 0.78
+                        : 0.82
+                    )
 
                 opacity: 0
 
-                transform: Translate {
+                transform:
+                    Translate {
 
-                    x:
-                        messageDelegate.isUser
-                        ? 16
-                        : -16
-                }
+                        x:
+                            messageDelegate.isUser
+                            ? 16
+                            : -16
+                    }
 
                 Component.onCompleted: {
 
@@ -444,7 +714,7 @@ Item {
 
                     width:
                         Math.min(
-                            maximumBubbleWidth,
+                            messageDelegate.maximumBubbleWidth,
                             Math.max(
                                 160,
                                 messageText.implicitWidth + 30
@@ -462,6 +732,10 @@ Item {
                         : parent.left
 
                     spacing: 6
+
+                    // --------------------------------------------------
+                    // META
+                    // --------------------------------------------------
 
                     Row {
 
@@ -501,7 +775,8 @@ Item {
                             visible:
                                 root.showTimestamps
 
-                            text: timestamp
+                            text:
+                                timestamp
 
                             color:
                                 Theme.textSecondary
@@ -512,25 +787,40 @@ Item {
                         }
                     }
 
+                    // --------------------------------------------------
+                    // BUBBLE
+                    // --------------------------------------------------
+
                     Rectangle {
 
                         id: messageBubble
 
                         width:
                             Math.min(
-                                maximumBubbleWidth,
-                                messageText.implicitWidth + 30
+                                messageDelegate.maximumBubbleWidth,
+                                Math.max(
+                                    160,
+                                    messageText.implicitWidth + 30
+                                )
                             )
 
                         height:
-                            messageText.implicitHeight + 22
+                            Math.max(
+                                root.fullscreen
+                                ? 52
+                                : 48,
+                                messageText.implicitHeight + 22
+                            )
 
                         anchors.right:
                             messageDelegate.isUser
                             ? parent.right
                             : undefined
 
-                        radius: 13
+                        radius:
+                            root.fullscreen
+                            ? 15
+                            : 13
 
                         color:
                             messageDelegate.isUser
@@ -570,9 +860,7 @@ Item {
                                 !messageDelegate.isUser
 
                             anchors.left: parent.left
-
                             anchors.top: parent.top
-
                             anchors.bottom: parent.bottom
 
                             width: 2
@@ -590,28 +878,36 @@ Item {
                             id: messageText
 
                             anchors.left: parent.left
-
                             anchors.right: parent.right
-
                             anchors.top: parent.top
-
                             anchors.bottom: parent.bottom
 
-                            anchors.leftMargin: 15
+                            anchors.leftMargin:
+                                root.fullscreen
+                                ? 17
+                                : 15
 
-                            anchors.rightMargin: 15
+                            anchors.rightMargin:
+                                root.fullscreen
+                                ? 17
+                                : 15
 
                             anchors.topMargin: 11
-
                             anchors.bottomMargin: 11
 
-                            text: message
+                            text:
+                                message
 
-                            color: Theme.textPrimary
+                            color:
+                                Theme.textPrimary
 
-                            font.pixelSize: 13
+                            font.pixelSize:
+                                root.fullscreen
+                                ? 14
+                                : 13
 
-                            lineHeight: 1.4
+                            lineHeight:
+                                1.4
 
                             wrapMode:
                                 Text.Wrap
@@ -692,69 +988,193 @@ Item {
 
                             model: 3
 
-                            delegate: Rectangle {
+                            delegate:
+                                Rectangle {
 
-                                width: 4
+                                    width: 4
+                                    height: 4
 
-                                height: 4
+                                    radius: 2
 
-                                radius: 2
+                                    color:
+                                        root.stateColor
 
-                                color:
-                                    root.stateColor
+                                    opacity: 0.25
 
-                                opacity: 0.25
+                                    SequentialAnimation on opacity {
 
-                                SequentialAnimation on opacity {
+                                        running: true
 
-                                    running: true
+                                        loops:
+                                            Animation.Infinite
 
-                                    loops:
-                                        Animation.Infinite
+                                        PauseAnimation {
+                                            duration:
+                                                index * 160
+                                        }
 
-                                    PauseAnimation {
+                                        NumberAnimation {
+                                            from: 0.25
+                                            to: 1
+                                            duration: 320
+                                        }
 
-                                        duration:
-                                            index * 160
-                                    }
-
-                                    NumberAnimation {
-
-                                        from: 0.25
-
-                                        to: 1
-
-                                        duration: 320
-                                    }
-
-                                    NumberAnimation {
-
-                                        from: 1
-
-                                        to: 0.25
-
-                                        duration: 320
+                                        NumberAnimation {
+                                            from: 1
+                                            to: 0.25
+                                            duration: 320
+                                        }
                                     }
                                 }
-                            }
                         }
                     }
                 }
             }
 
-            // ==================================================
-            // AUTO SCROLL
-            // ==================================================
-
             onCountChanged: {
+                root.scrollToBottom()
+            }
+        }
 
-                if (!root.autoScroll)
-                    return
+        // ======================================================
+        // AI HIGHLIGHTS
+        // ======================================================
 
-                Qt.callLater(function() {
+        Rectangle {
 
-                    messageList.positionViewAtEnd()
-                })
+            id: highlightsCard
+
+            visible:
+                root.showHighlights &&
+                root.currentHighlights.length > 0
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+
+            anchors.leftMargin:
+                root.fullscreen
+                ? 42
+                : 22
+
+            anchors.rightMargin:
+                root.fullscreen
+                ? 42
+                : 18
+
+            anchors.bottomMargin:
+                root.fullscreen
+                ? 24
+                : 16
+
+            implicitHeight:
+                highlightsColumn.implicitHeight + 28
+
+            radius: 16
+
+            color:
+                Qt.rgba(
+                    0.07,
+                    0.10,
+                    0.17,
+                    0.97
+                )
+
+            border.width: 1
+
+            border.color:
+                Qt.rgba(
+                    root.stateColor.r,
+                    root.stateColor.g,
+                    root.stateColor.b,
+                    0.24
+                )
+
+            z: 20
+
+            Column {
+
+                id: highlightsColumn
+
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+
+                anchors.leftMargin: 18
+                anchors.rightMargin: 18
+                anchors.topMargin: 14
+
+                spacing: 8
+
+                Row {
+
+                    spacing: 8
+
+                    Text {
+
+                        text: "✦"
+
+                        color:
+                            root.stateColor
+
+                        font.pixelSize: 13
+                    }
+
+                    Text {
+
+                        text:
+                            "KEY HIGHLIGHTS"
+
+                        color:
+                            root.stateColor
+
+                        font.pixelSize: 8
+
+                        font.bold: true
+
+                        font.letterSpacing: 2
+                    }
+                }
+
+                Text {
+
+                    width:
+                        parent.width
+
+                    text:
+                        root.currentHighlights
+
+                    color:
+                        Theme.textPrimary
+
+                    font.pixelSize:
+                        root.fullscreen
+                        ? 13
+                        : 12
+
+                    lineHeight: 1.35
+
+                    wrapMode:
+                        Text.Wrap
+
+                    maximumLineCount: 4
+
+                    elide:
+                        Text.ElideRight
+                }
+
+                Text {
+
+                    text:
+                        "Full response continues below ↓"
+
+                    color:
+                        Theme.textSecondary
+
+                    font.pixelSize: 9
+
+                    opacity: 0.55
+                }
             }
         }
     }
@@ -765,7 +1185,10 @@ Item {
 
     function addUserMessage(text) {
 
-        if (!text || text.trim().length === 0)
+        if (
+            !text ||
+            text.trim().length === 0
+        )
             return
 
         messageModel.append({
@@ -774,17 +1197,26 @@ Item {
 
             message: text.trim(),
 
-            timestamp: currentTime()
+            timestamp: currentTime(),
+
+            streaming: false
         })
 
         trimMessages()
 
-        root.messageSent(text.trim())
+        root.messageSent(
+            text.trim()
+        )
+
+        scrollToBottom()
     }
 
     function addAssistantMessage(text) {
 
-        if (!text || text.trim().length === 0)
+        if (
+            !text ||
+            text.trim().length === 0
+        )
             return
 
         messageModel.append({
@@ -793,15 +1225,22 @@ Item {
 
             message: text,
 
-            timestamp: currentTime()
+            timestamp: currentTime(),
+
+            streaming: false
         })
 
         trimMessages()
+
+        scrollToBottom()
     }
 
     function addMessage(role, text) {
 
-        if (!text || text.trim().length === 0)
+        if (
+            !text ||
+            text.trim().length === 0
+        )
             return
 
         messageModel.append({
@@ -810,10 +1249,35 @@ Item {
 
             message: text,
 
-            timestamp: currentTime()
+            timestamp: currentTime(),
+
+            streaming: false
         })
 
         trimMessages()
+
+        scrollToBottom()
+    }
+
+    // ==========================================================
+    // HIGHLIGHT API
+    // ==========================================================
+
+    function showAIHighlights(text) {
+
+        if (
+            !text ||
+            text.trim().length === 0
+        )
+            return
+
+        root.currentHighlights =
+            text.trim()
+    }
+
+    function clearHighlights() {
+
+        root.currentHighlights = ""
     }
 
     // ==========================================================
@@ -823,7 +1287,9 @@ Item {
     function startStreaming() {
 
         if (root.streaming)
-            finishStreaming()
+            return
+
+        root.clearHighlights()
 
         messageModel.append({
 
@@ -841,9 +1307,9 @@ Item {
 
         root.streaming = true
 
-        root.streamingStarted()
-
         root.state = "speaking"
+
+        root.streamingStarted()
 
         scrollToBottom()
     }
@@ -856,11 +1322,16 @@ Item {
         if (
             root.streamingIndex < 0 ||
             root.streamingIndex >= messageModel.count
-        ) {
+        )
             return
-        }
 
-        var current =
+        if (
+            !text ||
+            text.length === 0
+        )
+            return
+
+        var currentMessage =
             messageModel.get(
                 root.streamingIndex
             ).message
@@ -868,7 +1339,7 @@ Item {
         messageModel.setProperty(
             root.streamingIndex,
             "message",
-            current + text
+            currentMessage + text
         )
 
         scrollToBottom()
@@ -911,6 +1382,102 @@ Item {
     }
 
     // ==========================================================
+    // FOCUS MODE
+    // ==========================================================
+
+    function enterFullscreen() {
+
+        if (root.fullscreen)
+            return
+
+        root.fullscreen = true
+
+        var mainWindow =
+            Window.window
+
+        if (mainWindow) {
+
+            focusWindow.width =
+                Math.min(
+                    1100,
+                    Math.max(
+                        800,
+                        mainWindow.width - 140
+                    )
+                )
+
+            focusWindow.height =
+                Math.min(
+                    720,
+                    Math.max(
+                        500,
+                        mainWindow.height - 120
+                    )
+                )
+
+            focusWindow.x =
+                mainWindow.x +
+                Math.round(
+                    (
+                        mainWindow.width -
+                        focusWindow.width
+                    ) / 2
+                )
+
+            focusWindow.y =
+                mainWindow.y +
+                Math.round(
+                    (
+                        mainWindow.height -
+                        focusWindow.height
+                    ) / 2
+                )
+        }
+
+        panel.parent =
+            focusWindow.contentItem
+
+        panel.anchors.fill =
+            focusWindow.contentItem
+
+        panel.anchors.margins = 0
+
+        focusWindow.show()
+
+        focusWindow.raise()
+
+        focusWindow.requestActivate()
+
+        scrollToBottom()
+    }
+
+    function exitFullscreen() {
+
+        if (!root.fullscreen)
+            return
+
+        panel.parent = root
+
+        panel.anchors.fill = root
+
+        panel.anchors.margins = 0
+
+        root.fullscreen = false
+
+        focusWindow.hide()
+
+        scrollToBottom()
+    }
+
+    function toggleFullscreen() {
+
+        if (root.fullscreen)
+            root.exitFullscreen()
+        else
+            root.enterFullscreen()
+    }
+
+    // ==========================================================
     // UTILITIES
     // ==========================================================
 
@@ -919,10 +1486,17 @@ Item {
         if (!root.autoScroll)
             return
 
-        Qt.callLater(function() {
+        Qt.callLater(
+            function() {
 
-            messageList.positionViewAtEnd()
-        })
+                if (
+                    messageModel.count > 0
+                ) {
+
+                    messageList.positionViewAtEnd()
+                }
+            }
+        )
     }
 
     function clearMessages() {
@@ -932,6 +1506,8 @@ Item {
         root.streaming = false
 
         root.streamingIndex = -1
+
+        root.clearHighlights()
     }
 
     function trimMessages() {
@@ -947,7 +1523,8 @@ Item {
 
     function currentTime() {
 
-        var date = new Date()
+        var date =
+            new Date()
 
         return Qt.formatTime(
             date,
@@ -976,6 +1553,18 @@ Item {
 
         default:
             return "SYSTEM READY"
+        }
+    }
+
+    // ==========================================================
+    // ESCAPE KEY
+    // ==========================================================
+
+    Keys.onEscapePressed: {
+
+        if (root.fullscreen) {
+
+            root.exitFullscreen()
         }
     }
 
