@@ -13,7 +13,11 @@ from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Load .env before reading settings
+
+# ==========================================================
+# LOAD ENVIRONMENT
+# ==========================================================
+
 load_dotenv()
 
 
@@ -28,48 +32,79 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
-    # --------------------------------------------------
-    # Application
-    # --------------------------------------------------
+    # ======================================================
+    # APPLICATION
+    # ======================================================
 
-    app_name: str = Field(default="Krakken AI")
-    app_version: str = Field(default="0.1.0")
-    environment: str = Field(default="development")
-    debug: bool = Field(default=True)
+    app_name: str = Field(
+        default="Krakken AI"
+    )
 
-    # --------------------------------------------------
+    app_version: str = Field(
+        default="0.1.0"
+    )
+
+    environment: str = Field(
+        default="development"
+    )
+
+    debug: bool = Field(
+        default=True
+    )
+
+    # ======================================================
     # AI
-    # --------------------------------------------------
+    # ======================================================
 
-    groq_api_key: str = ""
-    openai_api_key: str = ""
+    groq_api_key: str = Field(
+        default=""
+    )
 
-    # --------------------------------------------------
-    # Voice
-    # --------------------------------------------------
+    groq_model: str = Field(
+        default="llama-3.1-8b-instant"
+    )
 
-    elevenlabs_api_key: str = ""
+    openai_api_key: str = Field(
+        default=""
+    )
 
-    # --------------------------------------------------
+    # ======================================================
+    # VOICE
+    # ======================================================
+
+    elevenlabs_api_key: str = Field(
+        default=""
+    )
+
+    # ======================================================
     # UI
-    # --------------------------------------------------
+    # ======================================================
 
     theme: str = "dark"
+
     language: str = "en"
 
-    # --------------------------------------------------
-    # Paths
-    # --------------------------------------------------
+    # ======================================================
+    # PATHS
+    # ======================================================
 
     root_dir: Path = Path.cwd()
 
     logs_dir: Path = Path("logs")
+
     cache_dir: Path = Path("cache")
+
     database_dir: Path = Path("database")
+
     plugins_dir: Path = Path("plugins")
 
     assets_dir: Path = Path("ui/assets")
+
     themes_dir: Path = Path("ui/themes")
+
+    # ======================================================
+    # DIRECTORIES
+    # ======================================================
 
     def initialize_directories(self) -> None:
         """
@@ -86,8 +121,16 @@ class AppConfig(BaseSettings):
         ]
 
         for directory in directories:
-            directory.mkdir(parents=True, exist_ok=True)
 
+            directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+
+# ==========================================================
+# GLOBAL CONFIGURATION
+# ==========================================================
 
 config = AppConfig()
 
