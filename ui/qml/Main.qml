@@ -1,3 +1,4 @@
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -279,12 +280,14 @@ ApplicationWindow {
                         return
                     }
 
+                    var cleanCommand = command.trim()
+
                     // ------------------------------------------------
                     // Display user message immediately.
                     // ------------------------------------------------
 
                     chatView.addUserMessage(
-                        command.trim()
+                        cleanCommand
                     )
 
                     // ------------------------------------------------
@@ -292,7 +295,7 @@ ApplicationWindow {
                     // ------------------------------------------------
 
                     assistantBridge.sendMessage(
-                        command.trim()
+                        cleanCommand
                     )
                 }
             }
@@ -399,3 +402,4 @@ ApplicationWindow {
         }
     }
 }
+
