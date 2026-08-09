@@ -30,8 +30,21 @@ Architecture:
 
 Important:
 EventBus callbacks may execute on background worker threads.
-Qt signals that affect QML must therefore be marshalled onto
-the Qt GUI thread.
+
+All UI-affecting communication is therefore marshalled
+through Qt queued signals.
+
+IMPORTANT:
+Response lifecycle events use ONE ordered Qt relay signal.
+
+This prevents:
+
+    responseFinished
+        ↓
+    being delivered before the final response chunks.
+
+Using separate queued signals for chunks and finished can
+allow them to be processed out of order.
 """
 
 from __future__ import annotations
@@ -47,7 +60,8 @@ class AssistantBridge(QObject):
     """
     Qt/QML bridge for the Krakken AI assistant.
 
-    EventBus callbacks can originate from worker threads.
+    EventBus callbacks may originate from worker threads.
+
     The bridge therefore forwards UI updates through Qt's
     event loop before emitting public QML signals.
     """
@@ -69,21 +83,32 @@ class AssistantBridge(QObject):
     highlightsReady = Signal(str)
 
     # ==========================================================
-    # INTERNAL QT RELAY SIGNALS
+    # ORDERED RESPONSE RELAY
     #
-    # EventBus callbacks may execute on background threads.
+    # IMPORTANT:
     #
-    # These relay signals move the data into the Qt object's
-    # thread before the public QML signals are emitted.
+    # All response lifecycle events travel through this ONE
+    # signal.
+    #
+    # This guarantees ordering:
+    #
+    # started
+    # chunk
+    # chunk
+    # chunk
+    # finished
+    #
+    # instead of using separate queued signals that may be
+    # delivered in an unexpected order.
+    # ==========================================================
+
+    _responseRelay = Signal(str, str)
+
+    # ==========================================================
+    # OTHER QT RELAYS
     # ==========================================================
 
     _stateRelay = Signal(str)
-
-    _responseStartedRelay = Signal()
-
-    _responseChunkRelay = Signal(str)
-
-    _responseFinishedRelay = Signal()
 
     _errorRelay = Signal(str)
 
@@ -107,29 +132,23 @@ class AssistantBridge(QObject):
         self._state = "idle"
 
         # ------------------------------------------------------
-        # Connect internal relay signals.
+        # Ordered response relay.
         #
-        # QueuedConnection ensures that the actual handlers
-        # execute through the Qt event loop.
+        # Every response event enters Qt through this single
+        # queued connection.
+        # ------------------------------------------------------
+
+        self._responseRelay.connect(
+            self._handle_response_relay,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        # ------------------------------------------------------
+        # Other relays.
         # ------------------------------------------------------
 
         self._stateRelay.connect(
             self._emit_state,
-            Qt.ConnectionType.QueuedConnection,
-        )
-
-        self._responseStartedRelay.connect(
-            self._emit_response_started,
-            Qt.ConnectionType.QueuedConnection,
-        )
-
-        self._responseChunkRelay.connect(
-            self._emit_response_chunk,
-            Qt.ConnectionType.QueuedConnection,
-        )
-
-        self._responseFinishedRelay.connect(
-            self._emit_response_finished,
             Qt.ConnectionType.QueuedConnection,
         )
 
@@ -287,10 +306,7 @@ class AssistantBridge(QObject):
         """
         Receive AI-generated highlights from the backend.
 
-        EventBus callbacks may execute on a worker thread.
-
-        The highlight text is therefore forwarded through
-        _highlightsRelay before reaching QML.
+        This callback may execute on a worker thread.
         """
 
         highlights = event.payload.get(
@@ -298,15 +314,12 @@ class AssistantBridge(QObject):
             "",
         )
 
-        if highlights is None:
+        if not highlights:
             return
 
         highlights = str(
             highlights
-        ).strip()
-
-        if not highlights:
-            return
+        )
 
         self._log(
             "AI highlights received."
@@ -325,7 +338,7 @@ class AssistantBridge(QObject):
         highlights: str,
     ) -> None:
         """
-        Emit highlightsReady from the Qt GUI thread.
+        Emit highlights from the Qt GUI thread.
         """
 
         if not highlights:
@@ -340,7 +353,7 @@ class AssistantBridge(QObject):
         except Exception as exc:
 
             self._log(
-                f"Failed to emit highlightsReady: {exc}",
+                f"Failed to emit highlights: {exc}",
                 error=True,
             )
 
@@ -362,25 +375,10 @@ class AssistantBridge(QObject):
             "Assistant response started."
         )
 
-        self._responseStartedRelay.emit()
-
-    def _emit_response_started(
-        self,
-    ) -> None:
-        """
-        Emit responseStarted from the Qt GUI thread.
-        """
-
-        try:
-
-            self.responseStarted.emit()
-
-        except Exception as exc:
-
-            self._log(
-                f"Failed to emit responseStarted: {exc}",
-                error=True,
-            )
+        self._responseRelay.emit(
+            "started",
+            "",
+        )
 
     # ==========================================================
     # RESPONSE CHUNK
@@ -394,6 +392,10 @@ class AssistantBridge(QObject):
         Receive a streamed AI response chunk.
 
         EventBus may call this from the AI worker thread.
+
+        IMPORTANT:
+        The chunk is sent through the same relay signal used
+        by responseFinished.
         """
 
         response = event.payload.get(
@@ -401,58 +403,21 @@ class AssistantBridge(QObject):
             "",
         )
 
-        if response is None:
+        if not response:
             return
 
         response = str(
             response
         )
 
-        if not response:
-            return
-
         self._log(
             f"AI CHUNK RECEIVED BY BRIDGE: {response!r}"
         )
 
-        # ------------------------------------------------------
-        # Do NOT emit responseChunk directly here.
-        #
-        # EventBus may be running this callback on the AI worker
-        # thread. Send the chunk through the Qt relay instead.
-        # ------------------------------------------------------
-
-        self._responseChunkRelay.emit(
-            response
+        self._responseRelay.emit(
+            "chunk",
+            response,
         )
-
-    def _emit_response_chunk(
-        self,
-        chunk: str,
-    ) -> None:
-        """
-        Emit responseChunk from the Qt GUI thread.
-        """
-
-        if not chunk:
-            return
-
-        self._log(
-            f"AI CHUNK FORWARDED TO QML: {chunk!r}"
-        )
-
-        try:
-
-            self.responseChunk.emit(
-                chunk
-            )
-
-        except Exception as exc:
-
-            self._log(
-                f"Failed to emit responseChunk: {exc}",
-                error=True,
-            )
 
     # ==========================================================
     # RESPONSE FINISHED
@@ -465,31 +430,88 @@ class AssistantBridge(QObject):
         """
         Receive response-finished event from backend.
 
-        The event is forwarded through Qt's event loop so
-        responseFinished is emitted on the GUI thread.
+        This is deliberately sent through the same relay as
+        response chunks.
+
+        Therefore:
+
+            chunk
+            chunk
+            chunk
+            finished
+
+        remains ordered when entering the Qt event loop.
         """
 
         self._log(
             "Assistant response finished."
         )
 
-        self._responseFinishedRelay.emit()
+        self._responseRelay.emit(
+            "finished",
+            "",
+        )
 
-    def _emit_response_finished(
+    # ==========================================================
+    # ORDERED RESPONSE RELAY HANDLER
+    # ==========================================================
+
+    @Slot(str, str)
+    def _handle_response_relay(
         self,
+        event_type: str,
+        data: str,
     ) -> None:
         """
-        Emit responseFinished from the Qt GUI thread.
+        Handle ordered response events on the Qt GUI thread.
         """
 
         try:
 
-            self.responseFinished.emit()
+            if event_type == "started":
+
+                self._log(
+                    "AI RESPONSE STARTED → QML"
+                )
+
+                self.responseStarted.emit()
+
+                return
+
+            if event_type == "chunk":
+
+                if not data:
+                    return
+
+                self._log(
+                    f"AI CHUNK FORWARDED TO QML: {data!r}"
+                )
+
+                self.responseChunk.emit(
+                    data
+                )
+
+                return
+
+            if event_type == "finished":
+
+                self._log(
+                    "AI RESPONSE FINISHED → QML"
+                )
+
+                self.responseFinished.emit()
+
+                return
+
+            self._log(
+                f"Unknown response relay event: {event_type}",
+                error=True,
+            )
 
         except Exception as exc:
 
             self._log(
-                f"Failed to emit responseFinished: {exc}",
+                f"Failed to handle response relay: {exc}",
                 error=True,
             )
 
@@ -584,10 +606,6 @@ class AssistantBridge(QObject):
 
         self._state = "error"
 
-        # ------------------------------------------------------
-        # Relay both error and state through Qt.
-        # ------------------------------------------------------
-
         self._errorRelay.emit(
             message
         )
@@ -613,7 +631,7 @@ class AssistantBridge(QObject):
         except Exception as exc:
 
             self._log(
-                f"Failed to emit errorOccurred: {exc}",
+                f"Failed to emit error: {exc}",
                 error=True,
             )
 
@@ -698,5 +716,4 @@ class AssistantBridge(QObject):
                 )
 
         except Exception:
-            # Logging must never crash the application.
             pass
