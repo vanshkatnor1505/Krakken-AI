@@ -3,7 +3,7 @@ Krakken AI - Assistant Bridge.
 
 Connects the QML frontend with the Python AI backend.
 
-The bridge is only responsible for communication between
+The bridge is responsible only for communication between
 QML and the EventBus.
 
 Architecture:
@@ -28,14 +28,17 @@ Architecture:
       ↓
     QML
 
-The bridge does NOT call Groq directly.
+Important:
+EventBus callbacks may execute on background worker threads.
+Qt signals that affect QML must therefore be marshalled onto
+the Qt GUI thread.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from core.events.event_bus import Event, EventBus
 
@@ -43,6 +46,10 @@ from core.events.event_bus import Event, EventBus
 class AssistantBridge(QObject):
     """
     Qt/QML bridge for the Krakken AI assistant.
+
+    EventBus callbacks can originate from worker threads.
+    The bridge therefore forwards UI updates through Qt's
+    event loop before emitting public QML signals.
     """
 
     # ==========================================================
@@ -59,11 +66,28 @@ class AssistantBridge(QObject):
 
     errorOccurred = Signal(str)
 
-    # ----------------------------------------------------------
-    # AI GENERATED HIGHLIGHTS
-    # ----------------------------------------------------------
-
     highlightsReady = Signal(str)
+
+    # ==========================================================
+    # INTERNAL QT RELAY SIGNALS
+    #
+    # EventBus callbacks may execute on background threads.
+    #
+    # These relay signals move the data into the Qt object's
+    # thread before the public QML signals are emitted.
+    # ==========================================================
+
+    _stateRelay = Signal(str)
+
+    _responseStartedRelay = Signal()
+
+    _responseChunkRelay = Signal(str)
+
+    _responseFinishedRelay = Signal()
+
+    _errorRelay = Signal(str)
+
+    _highlightsRelay = Signal(str)
 
     # ==========================================================
     # INITIALIZATION
@@ -78,13 +102,49 @@ class AssistantBridge(QObject):
         super().__init__()
 
         self.event_bus = event_bus
-
         self.logger = logger
 
         self._state = "idle"
 
         # ------------------------------------------------------
-        # Subscribe to backend -> UI events
+        # Connect internal relay signals.
+        #
+        # QueuedConnection ensures that the actual handlers
+        # execute through the Qt event loop.
+        # ------------------------------------------------------
+
+        self._stateRelay.connect(
+            self._emit_state,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        self._responseStartedRelay.connect(
+            self._emit_response_started,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        self._responseChunkRelay.connect(
+            self._emit_response_chunk,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        self._responseFinishedRelay.connect(
+            self._emit_response_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        self._errorRelay.connect(
+            self._emit_error,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        self._highlightsRelay.connect(
+            self._emit_highlights,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+        # ------------------------------------------------------
+        # Subscribe to backend → UI events.
         # ------------------------------------------------------
 
         if self.event_bus is not None:
@@ -114,10 +174,6 @@ class AssistantBridge(QObject):
                 self._on_assistant_error,
             )
 
-            # --------------------------------------------------
-            # AI generated highlights
-            # --------------------------------------------------
-
             self.event_bus.subscribe(
                 "assistant.highlights",
                 self._on_assistant_highlights,
@@ -144,7 +200,9 @@ class AssistantBridge(QObject):
         state: str,
     ) -> None:
         """
-        Update the assistant state and notify QML.
+        Update the internal assistant state.
+
+        This method may be called from any thread.
         """
 
         if not state:
@@ -159,12 +217,12 @@ class AssistantBridge(QObject):
             f"AI state changed: {state}"
         )
 
-        self.stateChanged.emit(
+        self._stateRelay.emit(
             state
         )
 
     # ==========================================================
-    # QML -> EVENT BUS
+    # QML → EVENT BUS
     # ==========================================================
 
     @Slot(str)
@@ -227,7 +285,12 @@ class AssistantBridge(QObject):
         event: Event,
     ) -> None:
         """
-        Forward AI-generated highlights to QML.
+        Receive AI-generated highlights from the backend.
+
+        EventBus callbacks may execute on a worker thread.
+
+        The highlight text is therefore forwarded through
+        _highlightsRelay before reaching QML.
         """
 
         highlights = event.payload.get(
@@ -235,23 +298,50 @@ class AssistantBridge(QObject):
             "",
         )
 
+        if highlights is None:
+            return
+
+        highlights = str(
+            highlights
+        ).strip()
+
+        if not highlights:
+            return
+
+        self._log(
+            "AI highlights received."
+        )
+
+        self._log(
+            f"AI HIGHLIGHTS: {highlights!r}"
+        )
+
+        self._highlightsRelay.emit(
+            highlights
+        )
+
+    def _emit_highlights(
+        self,
+        highlights: str,
+    ) -> None:
+        """
+        Emit highlightsReady from the Qt GUI thread.
+        """
+
         if not highlights:
             return
 
         try:
 
-            self._log(
-                "AI highlights received."
-            )
-
             self.highlightsReady.emit(
-                str(highlights)
+                highlights
             )
 
         except Exception as exc:
 
-            self._handle_error(
-                str(exc)
+            self._log(
+                f"Failed to emit highlightsReady: {exc}",
+                error=True,
             )
 
     # ==========================================================
@@ -263,21 +353,33 @@ class AssistantBridge(QObject):
         event: Event,
     ) -> None:
         """
-        Notify QML that an AI response has started.
+        Receive response-start event from backend.
+
+        This callback may run on a worker thread.
+        """
+
+        self._log(
+            "Assistant response started."
+        )
+
+        self._responseStartedRelay.emit()
+
+    def _emit_response_started(
+        self,
+    ) -> None:
+        """
+        Emit responseStarted from the Qt GUI thread.
         """
 
         try:
-
-            self._log(
-                "Assistant response started."
-            )
 
             self.responseStarted.emit()
 
         except Exception as exc:
 
-            self._handle_error(
-                str(exc)
+            self._log(
+                f"Failed to emit responseStarted: {exc}",
+                error=True,
             )
 
     # ==========================================================
@@ -289,7 +391,9 @@ class AssistantBridge(QObject):
         event: Event,
     ) -> None:
         """
-        Forward a streamed AI response chunk to QML.
+        Receive a streamed AI response chunk.
+
+        EventBus may call this from the AI worker thread.
         """
 
         response = event.payload.get(
@@ -297,23 +401,57 @@ class AssistantBridge(QObject):
             "",
         )
 
+        if response is None:
+            return
+
+        response = str(
+            response
+        )
+
         if not response:
             return
 
         self._log(
-            f"AI CHUNK FORWARDED TO QML: {response!r}"
+            f"AI CHUNK RECEIVED BY BRIDGE: {response!r}"
+        )
+
+        # ------------------------------------------------------
+        # Do NOT emit responseChunk directly here.
+        #
+        # EventBus may be running this callback on the AI worker
+        # thread. Send the chunk through the Qt relay instead.
+        # ------------------------------------------------------
+
+        self._responseChunkRelay.emit(
+            response
+        )
+
+    def _emit_response_chunk(
+        self,
+        chunk: str,
+    ) -> None:
+        """
+        Emit responseChunk from the Qt GUI thread.
+        """
+
+        if not chunk:
+            return
+
+        self._log(
+            f"AI CHUNK FORWARDED TO QML: {chunk!r}"
         )
 
         try:
 
             self.responseChunk.emit(
-                str(response)
+                chunk
             )
 
         except Exception as exc:
 
-            self._handle_error(
-                str(exc)
+            self._log(
+                f"Failed to emit responseChunk: {exc}",
+                error=True,
             )
 
     # ==========================================================
@@ -325,21 +463,34 @@ class AssistantBridge(QObject):
         event: Event,
     ) -> None:
         """
-        Notify QML that the AI response is complete.
+        Receive response-finished event from backend.
+
+        The event is forwarded through Qt's event loop so
+        responseFinished is emitted on the GUI thread.
+        """
+
+        self._log(
+            "Assistant response finished."
+        )
+
+        self._responseFinishedRelay.emit()
+
+    def _emit_response_finished(
+        self,
+    ) -> None:
+        """
+        Emit responseFinished from the Qt GUI thread.
         """
 
         try:
-
-            self._log(
-                "Assistant response finished."
-            )
 
             self.responseFinished.emit()
 
         except Exception as exc:
 
-            self._handle_error(
-                str(exc)
+            self._log(
+                f"Failed to emit responseFinished: {exc}",
+                error=True,
             )
 
     # ==========================================================
@@ -365,6 +516,31 @@ class AssistantBridge(QObject):
         self.set_state(
             str(state)
         )
+
+    # ==========================================================
+    # STATE QT EMISSION
+    # ==========================================================
+
+    def _emit_state(
+        self,
+        state: str,
+    ) -> None:
+        """
+        Emit stateChanged from the Qt GUI thread.
+        """
+
+        try:
+
+            self.stateChanged.emit(
+                state
+            )
+
+        except Exception as exc:
+
+            self._log(
+                f"Failed to emit stateChanged: {exc}",
+                error=True,
+            )
 
     # ==========================================================
     # ERROR EVENT
@@ -396,7 +572,9 @@ class AssistantBridge(QObject):
         message: str,
     ) -> None:
         """
-        Handle an assistant error and notify QML.
+        Handle an assistant error.
+
+        This method may be called from a worker thread.
         """
 
         self._log(
@@ -404,13 +582,40 @@ class AssistantBridge(QObject):
             error=True,
         )
 
-        self.set_state(
+        self._state = "error"
+
+        # ------------------------------------------------------
+        # Relay both error and state through Qt.
+        # ------------------------------------------------------
+
+        self._errorRelay.emit(
+            message
+        )
+
+        self._stateRelay.emit(
             "error"
         )
 
-        self.errorOccurred.emit(
-            message
-        )
+    def _emit_error(
+        self,
+        message: str,
+    ) -> None:
+        """
+        Emit the error signal from the Qt GUI thread.
+        """
+
+        try:
+
+            self.errorOccurred.emit(
+                message
+            )
+
+        except Exception as exc:
+
+            self._log(
+                f"Failed to emit errorOccurred: {exc}",
+                error=True,
+            )
 
     # ==========================================================
     # CLEAR CONVERSATION
@@ -472,7 +677,7 @@ class AssistantBridge(QObject):
         error: bool = False,
     ) -> None:
         """
-        Safely write to the Kraken logger.
+        Safely write to the Krakken logger.
         """
 
         if self.logger is None:
@@ -493,4 +698,5 @@ class AssistantBridge(QObject):
                 )
 
         except Exception:
+            # Logging must never crash the application.
             pass
