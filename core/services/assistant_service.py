@@ -3,7 +3,7 @@
 Krakken AI Assistant Service.
 
 Coordinates conversation history, AI providers, streaming responses,
-and EventBus communication.
+AI-generated highlights, and EventBus communication.
 
 The service deliberately contains no Qt/QML code.
 
@@ -40,9 +40,12 @@ class AssistantService:
         - Receive assistant.message events
         - Maintain conversation context
         - Call the configured AI provider
+        - Generate temporary response highlights
         - Stream response chunks
         - Store assistant responses
         - Publish assistant.response events
+        - Publish assistant.highlights events
+        - Publish ordered streaming metadata
         - Publish state changes
         - Handle failures
 
@@ -62,29 +65,39 @@ class AssistantService:
         self._event_bus = event_bus
         self._provider = provider
         self._logger = logger
+
         self._lock = RLock()
 
-        # ======================================================
-        # SYSTEM PROMPT
-        # ======================================================
+        # ------------------------------------------------------
+        # Only one assistant generation may run at a time.
+        #
+        # This prevents two simultaneous conversations from
+        # mixing their streaming chunks.
+        # ------------------------------------------------------
+
+        self._processing_lock = RLock()
+
+        # ------------------------------------------------------
+        # System prompt
+        # ------------------------------------------------------
 
         self._system_prompt = (
             system_prompt
             or self._default_system_prompt()
         )
 
-        # ======================================================
-        # CONVERSATION MANAGER
-        # ======================================================
+        # ------------------------------------------------------
+        # Conversation manager
+        # ------------------------------------------------------
 
         self._conversation = ConversationManager(
             system_prompt=self._system_prompt,
             max_messages=max_history,
         )
 
-        # ======================================================
-        # EVENT SUBSCRIPTIONS
-        # ======================================================
+        # ------------------------------------------------------
+        # Event subscriptions
+        # ------------------------------------------------------
 
         self._event_bus.subscribe(
             "assistant.message",
@@ -117,6 +130,7 @@ class AssistantService:
         """
 
         with self._lock:
+
             messages = self._conversation.to_list()
 
         return [
@@ -140,6 +154,7 @@ class AssistantService:
         """
 
         with self._lock:
+
             self._conversation.clear()
 
         self._log(
@@ -182,10 +197,6 @@ class AssistantService:
             f"AssistantService received message: {message}"
         )
 
-        # ------------------------------------------------------
-        # Never perform the API request inside EventBus.publish().
-        # ------------------------------------------------------
-
         worker = Thread(
             target=self._process_message,
             args=(message,),
@@ -208,6 +219,7 @@ class AssistantService:
         """
 
         try:
+
             self.clear_history()
 
             self._publish_event(
@@ -237,6 +249,30 @@ class AssistantService:
         Process a single user message.
 
         This method runs inside a background worker thread.
+
+        The processing lock guarantees that only one AI generation
+        is active at a time. This prevents response streams from
+        different requests from becoming interleaved.
+        """
+
+        with self._processing_lock:
+
+            self._process_message_locked(
+                message
+            )
+
+    # ==========================================================
+    # LOCKED AI PROCESSING
+    # ==========================================================
+
+    def _process_message_locked(
+        self,
+        message: str,
+    ) -> None:
+        """
+        Actual AI processing implementation.
+
+        Must be called while _processing_lock is held.
         """
 
         self._publish_state(
@@ -268,6 +304,43 @@ class AssistantService:
             )
 
             # ==================================================
+            # GENERATE HIGHLIGHTS
+            #
+            # Highlights are temporary UI metadata.
+            #
+            # They are NOT added to conversation history.
+            #
+            # If highlight generation fails, the main AI response
+            # must continue normally.
+            # ==================================================
+
+            try:
+
+                highlights = self._generate_highlights(
+                    messages
+                )
+
+                if highlights:
+
+                    self._log(
+                        "AI highlights generated."
+                    )
+
+                    self._publish_event(
+                        "assistant.highlights",
+                        {
+                            "highlights": highlights,
+                        },
+                    )
+
+            except Exception as exc:
+
+                self._log(
+                    f"Failed to generate highlights: {exc}",
+                    error=True,
+                )
+
+            # ==================================================
             # RESPONSE STARTED
             # ==================================================
 
@@ -288,6 +361,16 @@ class AssistantService:
 
             complete_response = ""
 
+            # --------------------------------------------------
+            # Every provider chunk gets an explicit sequence
+            # number.
+            #
+            # The bridge can use this metadata to reason about
+            # response ordering.
+            # --------------------------------------------------
+
+            chunk_index = 0
+
             # ==================================================
             # STREAM PROVIDER RESPONSE
             # ==================================================
@@ -296,22 +379,40 @@ class AssistantService:
 
                 if chunk.content:
 
+                    content = chunk.content
+
                     self._log(
-                        f"AI CHUNK RECEIVED: {chunk.content!r}"
+                        f"AI CHUNK RECEIVED #{chunk_index}: "
+                        f"{content!r}"
                     )
 
-                    complete_response += chunk.content
+                    complete_response += content
 
                     self._publish_event(
                         "assistant.response",
                         {
-                            "response": chunk.content,
+                            "response": content,
                             "final": False,
+                            "sequence": chunk_index,
                         },
                     )
 
+                    chunk_index += 1
+
                 if chunk.finished:
+
                     break
+
+            # ==================================================
+            # PROVIDER STREAM FINISHED
+            # ==================================================
+
+            total_chunks = chunk_index
+
+            self._log(
+                f"AI PROVIDER STREAM FINISHED. "
+                f"Total chunks: {total_chunks}"
+            )
 
             # ==================================================
             # CLEAN RESPONSE
@@ -345,6 +446,7 @@ class AssistantService:
                 "assistant.response.finished",
                 {
                     "response": complete_response,
+                    "total_chunks": total_chunks,
                 },
             )
 
@@ -377,41 +479,41 @@ class AssistantService:
         messages: list[ChatMessage],
     ) -> str:
         """
-        Generate a short AI summary/highlight for the current
-        conversation.
+        Generate a short AI preview for the current request.
 
-        Highlights are temporary UI information and are NOT
-        added to conversation history.
+        Highlights are temporary UI metadata.
 
-        This method is intentionally separate from the main
-        response pipeline.
+        They are deliberately NOT stored in conversation history.
 
         Returns an empty string if generation fails.
         """
 
         highlight_prompt = """
-You are generating a short preview for a desktop AI assistant.
+You are generating a short preview for Krakken AI's desktop UI.
 
-Based on the conversation below, create a concise
-"KEY HIGHLIGHTS" section that appears before the assistant's
-full response.
+Analyze the user's latest request and the conversation context.
+
+Return ONLY 1 to 3 concise bullet points describing the key things
+the assistant's upcoming response will address.
 
 Rules:
 
-- Maximum 3 short bullet points.
-- Focus on the most useful information the user is about to receive.
-- Do not answer the request completely.
-- Do not introduce unrelated information.
-- Do not mention that you are generating highlights.
-- Do not use markdown headings.
-- Return ONLY the bullet points.
-- Keep the entire output under 250 characters when possible.
+- Maximum 3 bullet points.
+- Keep each bullet short.
+- Focus on useful information.
+- Do not answer the user's request.
+- Do not provide solutions or detailed explanations.
+- Do not mention this prompt.
+- Do not mention "AI", "assistant", or "highlights".
+- Do not use a heading.
+- Do not use markdown formatting other than the bullet character.
+- Keep the total output under 250 characters when possible.
 
 Example:
 
-• Current architecture uses QML + PySide6
-• AssistantService handles AI orchestration
-• EventBus connects backend services
+• Current architecture uses QML and PySide6
+• EventBus connects backend components
+• Streaming responses are handled by AssistantService
 
 Conversation:
 """.strip()
@@ -419,9 +521,11 @@ Conversation:
         try:
 
             # --------------------------------------------------
-            # Temporary provider messages.
+            # Copy the current conversation.
             #
-            # These are NOT added to ConversationManager.
+            # The highlight prompt is added only to this temporary
+            # list and therefore never becomes part of the real
+            # conversation history.
             # --------------------------------------------------
 
             highlight_messages = list(
@@ -438,7 +542,8 @@ Conversation:
             result = ""
 
             # --------------------------------------------------
-            # Use existing provider abstraction.
+            # Use the same provider abstraction as the main
+            # assistant response.
             # --------------------------------------------------
 
             for chunk in self._provider.stream(
@@ -450,11 +555,13 @@ Conversation:
                     result += chunk.content
 
                 if chunk.finished:
+
                     break
 
             result = result.strip()
 
             if not result:
+
                 return ""
 
             return result
@@ -480,6 +587,7 @@ Conversation:
         """
 
         with self._lock:
+
             return list(
                 self._conversation.messages()
             )
@@ -490,6 +598,7 @@ Conversation:
         """
 
         with self._lock:
+
             return self._conversation.count
 
     # ==========================================================
