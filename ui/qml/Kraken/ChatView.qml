@@ -21,21 +21,19 @@ Item {
 
     property int maxMessages: 200
 
-    // Focus mode.
-    // This is intentionally NOT desktop fullscreen.
     property bool fullscreen: false
 
-    // Backend bridge.
     property var assistantBridge: null
 
-    // AI-generated highlights.
+    // ==========================================================
+    // KEY HIGHLIGHTS
+    // ==========================================================
+
     property bool showHighlights: true
     property string currentHighlights: ""
 
-    // Controls whether the current highlight card is visible.
-    property bool highlightsVisible:
-        root.showHighlights &&
-        root.currentHighlights.length > 0
+    // Parsed highlight items.
+    property var highlightItems: []
 
     signal messageSent(string message)
     signal clearRequested()
@@ -93,7 +91,7 @@ Item {
     }
 
     // ==========================================================
-    // ASSISTANT BRIDGE CONNECTION
+    // ASSISTANT BRIDGE
     // ==========================================================
 
     Connections {
@@ -103,7 +101,7 @@ Item {
         target: root.assistantBridge
 
         // ------------------------------------------------------
-        // BACKEND STATE
+        // STATE
         // ------------------------------------------------------
 
         function onStateChanged(state) {
@@ -115,10 +113,33 @@ Item {
         }
 
         // ------------------------------------------------------
+        // HIGHLIGHTS
+        // ------------------------------------------------------
+
+        function onHighlightsReady(highlights) {
+
+            if (!highlights)
+                return
+
+            console.log(
+                "QML HIGHLIGHTS:",
+                highlights
+            )
+
+            root.showAIHighlights(
+                highlights
+            )
+        }
+
+        // ------------------------------------------------------
         // RESPONSE STARTED
         // ------------------------------------------------------
 
         function onResponseStarted() {
+
+            console.log(
+                "QML RESPONSE STARTED"
+            )
 
             root.startStreaming()
         }
@@ -143,11 +164,15 @@ Item {
 
         function onResponseFinished() {
 
+            console.log(
+                "QML RESPONSE FINISHED"
+            )
+
             root.finishStreaming()
         }
 
         // ------------------------------------------------------
-        // BACKEND ERROR
+        // ERROR
         // ------------------------------------------------------
 
         function onErrorOccurred(error) {
@@ -166,34 +191,10 @@ Item {
                 )
             }
         }
-
-        // ------------------------------------------------------
-        // AI HIGHLIGHTS
-        //
-        // THIS WAS THE MISSING CONNECTION.
-        //
-        // AssistantBridge:
-        //
-        //     highlightsReady(str)
-        //
-        // becomes:
-        //
-        //     ChatView.showAIHighlights(str)
-        // ------------------------------------------------------
-
-        function onHighlightsReady(highlights) {
-
-            if (!highlights)
-                return
-
-            root.showAIHighlights(
-                highlights
-            )
-        }
     }
 
     // ==========================================================
-    // FOCUS MODE WINDOW
+    // FOCUS WINDOW
     // ==========================================================
 
     Window {
@@ -218,13 +219,12 @@ Item {
             Qt.WindowMaximizeButtonHint |
             Qt.WindowCloseButtonHint
 
-        color:
-            Qt.rgba(
-                0.025,
-                0.04,
-                0.07,
-                1.0
-            )
+        color: Qt.rgba(
+            0.025,
+            0.04,
+            0.07,
+            1.0
+        )
 
         modality: Qt.NonModal
 
@@ -250,7 +250,7 @@ Item {
     }
 
     // ==========================================================
-    // MAIN CHAT PANEL
+    // MAIN PANEL
     // ==========================================================
 
     Rectangle {
@@ -283,517 +283,740 @@ Item {
             )
 
         // ======================================================
-        // HEADER
+        // MAIN COLUMN
         // ======================================================
 
-        Rectangle {
+        ColumnLayout {
 
-            id: header
+            anchors.fill: parent
 
-            visible:
-                root.showHeader
+            spacing: 0
 
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
+            // ==================================================
+            // HEADER
+            // ==================================================
 
-            height:
-                root.fullscreen
-                ? 68
-                : 58
+            Rectangle {
 
-            color: "transparent"
+                id: header
 
-            RowLayout {
+                visible: root.showHeader
 
-                anchors.fill: parent
+                Layout.fillWidth: true
 
-                anchors.leftMargin:
+                Layout.preferredHeight:
                     root.fullscreen
-                    ? 28
-                    : 24
+                    ? 68
+                    : 58
 
-                anchors.rightMargin:
-                    root.fullscreen
-                    ? 22
-                    : 18
+                color: "transparent"
 
-                spacing: 12
+                RowLayout {
 
-                Rectangle {
+                    anchors.fill: parent
 
-                    Layout.alignment:
-                        Qt.AlignVCenter
+                    anchors.leftMargin:
+                        root.fullscreen
+                        ? 28
+                        : 24
 
-                    width: 7
-                    height: 7
+                    anchors.rightMargin:
+                        root.fullscreen
+                        ? 22
+                        : 18
 
-                    radius: 3.5
+                    spacing: 12
 
-                    color:
-                        root.stateColor
+                    Rectangle {
 
-                    SequentialAnimation on opacity {
+                        Layout.alignment:
+                            Qt.AlignVCenter
 
-                        running:
-                            root.state !== "idle"
+                        width: 7
+                        height: 7
 
-                        loops:
-                            Animation.Infinite
-
-                        NumberAnimation {
-                            from: 0.35
-                            to: 1
-                            duration: 650
-                        }
-
-                        NumberAnimation {
-                            from: 1
-                            to: 0.35
-                            duration: 650
-                        }
-                    }
-                }
-
-                ColumnLayout {
-
-                    Layout.fillWidth: true
-
-                    spacing: 2
-
-                    Text {
-
-                        text: "KRAKKEN"
-
-                        color:
-                            Theme.textPrimary
-
-                        font.pixelSize:
-                            root.fullscreen
-                            ? 15
-                            : 13
-
-                        font.bold: true
-
-                        font.letterSpacing: 2.2
-                    }
-
-                    Text {
-
-                        text:
-                            root.fullscreen
-                            ? "FOCUS MODE • "
-                              + stateDescription()
-                            : stateDescription()
+                        radius: 3.5
 
                         color:
                             root.stateColor
 
-                        font.pixelSize: 8
+                        SequentialAnimation on opacity {
 
-                        font.bold: true
+                            running:
+                                root.state !== "idle"
 
-                        font.letterSpacing: 1.6
+                            loops:
+                                Animation.Infinite
 
-                        opacity: 0.72
-                    }
-                }
+                            NumberAnimation {
+                                from: 0.35
+                                to: 1
+                                duration: 650
+                            }
 
-                Text {
-
-                    Layout.alignment:
-                        Qt.AlignVCenter
-
-                    text:
-                        messageModel.count
-                        + " MESSAGES"
-
-                    color:
-                        Theme.textSecondary
-
-                    font.pixelSize: 8
-
-                    font.letterSpacing: 1
-
-                    opacity: 0.55
-                }
-
-                Rectangle {
-
-                    Layout.alignment:
-                        Qt.AlignVCenter
-
-                    width: 34
-                    height: 34
-
-                    radius: 9
-
-                    color:
-                        fullscreenMouse.containsMouse
-                        ? Qt.rgba(
-                            1,
-                            1,
-                            1,
-                            0.07
-                        )
-                        : "transparent"
-
-                    Text {
-
-                        anchors.centerIn: parent
-
-                        text:
-                            root.fullscreen
-                            ? "⤢"
-                            : "⛶"
-
-                        color:
-                            Theme.textSecondary
-
-                        font.pixelSize: 17
-
-                        opacity: 0.75
-                    }
-
-                    MouseArea {
-
-                        id: fullscreenMouse
-
-                        anchors.fill: parent
-
-                        hoverEnabled: true
-
-                        cursorShape:
-                            Qt.PointingHandCursor
-
-                        onClicked:
-                            root.toggleFullscreen()
-                    }
-
-                    ToolTip.visible:
-                        fullscreenMouse.containsMouse
-
-                    ToolTip.text:
-                        root.fullscreen
-                        ? "Return to normal chat"
-                        : "Open Focus Mode"
-                }
-
-                Rectangle {
-
-                    Layout.alignment:
-                        Qt.AlignVCenter
-
-                    width: 30
-                    height: 30
-
-                    radius: 9
-
-                    color:
-                        clearMouse.containsMouse
-                        ? Qt.rgba(
-                            1,
-                            1,
-                            1,
-                            0.06
-                        )
-                        : "transparent"
-
-                    Text {
-
-                        anchors.centerIn: parent
-
-                        text: "×"
-
-                        color:
-                            Theme.textSecondary
-
-                        font.pixelSize: 18
-
-                        opacity: 0.65
-                    }
-
-                    MouseArea {
-
-                        id: clearMouse
-
-                        anchors.fill: parent
-
-                        hoverEnabled: true
-
-                        cursorShape:
-                            Qt.PointingHandCursor
-
-                        onClicked: {
-
-                            root.clearMessages()
-
-                            root.clearRequested()
+                            NumberAnimation {
+                                from: 1
+                                to: 0.35
+                                duration: 650
+                            }
                         }
                     }
 
-                    ToolTip.visible:
-                        clearMouse.containsMouse
+                    ColumnLayout {
 
-                    ToolTip.text:
-                        "Clear conversation"
-                }
-            }
+                        Layout.fillWidth: true
 
-            Rectangle {
+                        spacing: 2
 
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
+                        Text {
 
-                height: 1
+                            text: "KRAKKEN"
 
-                color:
-                    Qt.rgba(
-                        1,
-                        1,
-                        1,
-                        0.035
-                    )
-            }
-        }
+                            color:
+                                Theme.textPrimary
 
-        // ======================================================
-        // MESSAGE LIST
-        // ======================================================
+                            font.pixelSize:
+                                root.fullscreen
+                                ? 15
+                                : 13
 
-        ListView {
+                            font.bold: true
 
-            id: messageList
-
-            anchors.left: parent.left
-            anchors.right: parent.right
-
-            anchors.top:
-                root.showHeader
-                ? header.bottom
-                : parent.top
-
-            anchors.bottom: parent.bottom
-
-            anchors.leftMargin:
-                root.fullscreen
-                ? 42
-                : 22
-
-            anchors.rightMargin:
-                root.fullscreen
-                ? 42
-                : 18
-
-            anchors.topMargin:
-                root.fullscreen
-                ? 22
-                : 14
-
-            anchors.bottomMargin:
-                root.highlightsVisible
-                ? (
-                    highlightsCard.height +
-                    (
-                        root.fullscreen
-                        ? 36
-                        : 28
-                    )
-                )
-                : (
-                    root.fullscreen
-                    ? 28
-                    : 16
-                )
-
-            clip: true
-
-            model: messageModel
-
-            spacing:
-                root.fullscreen
-                ? 22
-                : 18
-
-            boundsBehavior:
-                Flickable.StopAtBounds
-
-            ScrollBar.vertical:
-                ScrollBar {
-                    policy:
-                        ScrollBar.AsNeeded
-                }
-
-            // ==================================================
-            // EMPTY STATE
-            // ==================================================
-
-            Text {
-
-                anchors.centerIn: parent
-
-                visible:
-                    messageModel.count === 0
-
-                text:
-                    "AWAITING COMMAND"
-
-                color:
-                    Theme.textSecondary
-
-                opacity: 0.28
-
-                font.pixelSize: 10
-
-                font.bold: true
-
-                font.letterSpacing: 3
-            }
-
-            // ==================================================
-            // MESSAGE DELEGATE
-            // ==================================================
-
-            delegate: Item {
-
-                id: messageDelegate
-
-                width:
-                    messageList.width
-
-                height:
-                    messageContent.height + 12
-
-                property bool isUser:
-                    role === "user"
-
-                property real maximumBubbleWidth:
-                    messageList.width *
-                    (
-                        root.fullscreen
-                        ? 0.78
-                        : 0.82
-                    )
-
-                opacity: 0
-
-                transform:
-                    Translate {
-
-                        x:
-                            messageDelegate.isUser
-                            ? 16
-                            : -16
-                    }
-
-                Component.onCompleted: {
-
-                    messageDelegate.opacity = 1
-
-                    messageDelegate.x = 0
-                }
-
-                Behavior on opacity {
-
-                    NumberAnimation {
-
-                        duration: 280
-
-                        easing.type:
-                            Easing.OutCubic
-                    }
-                }
-
-                Behavior on x {
-
-                    NumberAnimation {
-
-                        duration: 280
-
-                        easing.type:
-                            Easing.OutCubic
-                    }
-                }
-
-                Column {
-
-                    id: messageContent
-
-                    width:
-                        Math.min(
-                            messageDelegate.maximumBubbleWidth,
-                            Math.max(
-                                160,
-                                messageText.implicitWidth + 30
-                            )
-                        )
-
-                    anchors.right:
-                        messageDelegate.isUser
-                        ? parent.right
-                        : undefined
-
-                    anchors.left:
-                        messageDelegate.isUser
-                        ? undefined
-                        : parent.left
-
-                    spacing: 6
-
-                    Row {
-
-                        spacing: 8
-
-                        anchors.right:
-                            messageDelegate.isUser
-                            ? parent.right
-                            : undefined
+                            font.letterSpacing: 2.2
+                        }
 
                         Text {
 
                             text:
-                                messageDelegate.isUser
-                                ? "YOU"
-                                : "KRAKKEN"
+                                root.fullscreen
+                                ? "FOCUS MODE • "
+                                  + stateDescription()
+                                : stateDescription()
 
                             color:
-                                messageDelegate.isUser
-                                ? Theme.textSecondary
-                                : root.stateColor
+                                root.stateColor
 
                             font.pixelSize: 8
 
                             font.bold: true
 
-                            font.letterSpacing: 2
+                            font.letterSpacing: 1.6
 
-                            opacity:
-                                messageDelegate.isUser
-                                ? 0.65
-                                : 0.9
+                            opacity: 0.72
+                        }
+                    }
+
+                    Text {
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
+
+                        text:
+                            messageModel.count
+                            + " MESSAGES"
+
+                        color:
+                            Theme.textSecondary
+
+                        font.pixelSize: 8
+
+                        font.letterSpacing: 1
+
+                        opacity: 0.55
+                    }
+
+                    Rectangle {
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
+
+                        width: 34
+                        height: 34
+
+                        radius: 9
+
+                        color:
+                            fullscreenMouse.containsMouse
+                            ? Qt.rgba(
+                                1,
+                                1,
+                                1,
+                                0.07
+                            )
+                            : "transparent"
+
+                        Text {
+
+                            anchors.centerIn: parent
+
+                            text:
+                                root.fullscreen
+                                ? "⤢"
+                                : "⛶"
+
+                            color:
+                                Theme.textSecondary
+
+                            font.pixelSize: 17
+
+                            opacity: 0.75
+                        }
+
+                        MouseArea {
+
+                            id: fullscreenMouse
+
+                            anchors.fill: parent
+
+                            hoverEnabled: true
+
+                            cursorShape:
+                                Qt.PointingHandCursor
+
+                            onClicked:
+                                root.toggleFullscreen()
+                        }
+
+                        ToolTip.visible:
+                            fullscreenMouse.containsMouse
+
+                        ToolTip.text:
+                            root.fullscreen
+                            ? "Return to normal chat"
+                            : "Open Focus Mode"
+                    }
+
+                    Rectangle {
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
+
+                        width: 30
+                        height: 30
+
+                        radius: 9
+
+                        color:
+                            clearMouse.containsMouse
+                            ? Qt.rgba(
+                                1,
+                                1,
+                                1,
+                                0.06
+                            )
+                            : "transparent"
+
+                        Text {
+
+                            anchors.centerIn: parent
+
+                            text: "×"
+
+                            color:
+                                Theme.textSecondary
+
+                            font.pixelSize: 18
+
+                            opacity: 0.65
+                        }
+
+                        MouseArea {
+
+                            id: clearMouse
+
+                            anchors.fill: parent
+
+                            hoverEnabled: true
+
+                            cursorShape:
+                                Qt.PointingHandCursor
+
+                            onClicked: {
+
+                                root.clearMessages()
+
+                                root.clearRequested()
+                            }
+                        }
+
+                        ToolTip.visible:
+                            clearMouse.containsMouse
+
+                        ToolTip.text:
+                            "Clear conversation"
+                    }
+                }
+
+                Rectangle {
+
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+
+                    height: 1
+
+                    color:
+                        Qt.rgba(
+                            1,
+                            1,
+                            1,
+                            0.035
+                        )
+                }
+            }
+
+            // ==================================================
+            // KEY HIGHLIGHTS
+            // ==================================================
+
+            Rectangle {
+
+                id: highlightsCard
+
+                Layout.fillWidth: true
+
+                Layout.preferredHeight:
+                    root.showHighlights &&
+                    root.currentHighlights.length > 0
+                    ? highlightsContent.implicitHeight + 30
+                    : 0
+
+                visible:
+                    root.showHighlights &&
+                    root.currentHighlights.length > 0
+
+                clip: true
+
+                color:
+                    Qt.rgba(
+                        0.055,
+                        0.085,
+                        0.145,
+                        0.98
+                    )
+
+                border.width: 1
+
+                border.color:
+                    Qt.rgba(
+                        root.stateColor.r,
+                        root.stateColor.g,
+                        root.stateColor.b,
+                        0.20
+                    )
+
+                Behavior on Layout.preferredHeight {
+
+                    NumberAnimation {
+
+                        duration: 260
+
+                        easing.type:
+                            Easing.OutCubic
+                    }
+                }
+
+                ColumnLayout {
+
+                    id: highlightsContent
+
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+
+                    anchors.leftMargin:
+                        root.fullscreen
+                        ? 28
+                        : 20
+
+                    anchors.rightMargin:
+                        root.fullscreen
+                        ? 28
+                        : 20
+
+                    anchors.topMargin: 14
+
+                    spacing: 9
+
+                    // ------------------------------------------
+                    // HEADER
+                    // ------------------------------------------
+
+                    RowLayout {
+
+                        Layout.fillWidth: true
+
+                        spacing: 8
+
+                        Rectangle {
+
+                            Layout.alignment:
+                                Qt.AlignVCenter
+
+                            width: 3
+                            height: 16
+
+                            radius: 2
+
+                            color:
+                                root.stateColor
                         }
 
                         Text {
 
-                            visible:
-                                root.showTimestamps
+                            Layout.fillWidth: true
 
                             text:
-                                timestamp
+                                "KEY HIGHLIGHTS"
+
+                            color:
+                                root.stateColor
+
+                            font.pixelSize:
+                                root.fullscreen
+                                ? 9
+                                : 8
+
+                            font.bold: true
+
+                            font.letterSpacing: 2
+                        }
+
+                        Text {
+
+                            text:
+                                "AI PREVIEW"
+
+                            color:
+                                Theme.textSecondary
+
+                            font.pixelSize: 7
+
+                            font.bold: true
+
+                            font.letterSpacing: 1.2
+
+                            opacity: 0.45
+                        }
+
+                        Rectangle {
+
+                            width: 25
+                            height: 25
+
+                            radius: 7
+
+                            color:
+                                highlightCloseMouse.containsMouse
+                                ? Qt.rgba(
+                                    1,
+                                    1,
+                                    1,
+                                    0.08
+                                )
+                                : "transparent"
+
+                            Text {
+
+                                anchors.centerIn: parent
+
+                                text: "×"
+
+                                color:
+                                    Theme.textSecondary
+
+                                font.pixelSize: 15
+
+                                opacity: 0.6
+                            }
+
+                            MouseArea {
+
+                                id: highlightCloseMouse
+
+                                anchors.fill: parent
+
+                                hoverEnabled: true
+
+                                cursorShape:
+                                    Qt.PointingHandCursor
+
+                                onClicked:
+                                    root.clearHighlights()
+                            }
+                        }
+                    }
+
+                    // ------------------------------------------
+                    // HIGHLIGHT LIST
+                    // ------------------------------------------
+
+                    ColumnLayout {
+
+                        Layout.fillWidth: true
+
+                        spacing: 7
+
+                        Repeater {
+
+                            model:
+                                root.highlightItems
+
+                            delegate: RowLayout {
+
+                                Layout.fillWidth: true
+
+                                spacing: 9
+
+                                opacity: 0
+
+                                Component.onCompleted:
+                                    opacity = 1
+
+                                Behavior on opacity {
+
+                                    NumberAnimation {
+
+                                        duration: 280
+
+                                        easing.type:
+                                            Easing.OutCubic
+                                    }
+                                }
+
+                                Rectangle {
+
+                                    Layout.alignment:
+                                        Qt.AlignTop
+
+                                    Layout.topMargin: 5
+
+                                    width: 5
+                                    height: 5
+
+                                    radius: 2.5
+
+                                    color:
+                                        root.stateColor
+
+                                    opacity: 0.9
+                                }
+
+                                Text {
+
+                                    Layout.fillWidth: true
+
+                                    text:
+                                        modelData
+
+                                    color:
+                                        Theme.textPrimary
+
+                                    font.pixelSize:
+                                        root.fullscreen
+                                        ? 12
+                                        : 11
+
+                                    lineHeight: 1.25
+
+                                    wrapMode:
+                                        Text.Wrap
+
+                                    maximumLineCount: 2
+
+                                    elide:
+                                        Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+
+                    // ------------------------------------------
+                    // FOOTER
+                    // ------------------------------------------
+
+                    RowLayout {
+
+                        Layout.fillWidth: true
+
+                        spacing: 7
+
+                        Text {
+
+                            text: "✦"
+
+                            color:
+                                root.stateColor
+
+                            font.pixelSize: 9
+
+                            opacity: 0.7
+                        }
+
+                        Text {
+
+                            Layout.fillWidth: true
+
+                            text:
+                                root.streaming
+                                ? "Response is being generated…"
+                                : "AI-generated response preview"
 
                             color:
                                 Theme.textSecondary
 
                             font.pixelSize: 8
 
-                            opacity: 0.3
+                            opacity: 0.48
+                        }
+                    }
+                }
+            }
+
+            // ==================================================
+            // MESSAGE LIST
+            // ==================================================
+
+            ListView {
+
+                id: messageList
+
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                Layout.leftMargin:
+                    root.fullscreen
+                    ? 42
+                    : 22
+
+                Layout.rightMargin:
+                    root.fullscreen
+                    ? 42
+                    : 18
+
+                Layout.topMargin:
+                    root.fullscreen
+                    ? 18
+                    : 14
+
+                Layout.bottomMargin:
+                    root.fullscreen
+                    ? 28
+                    : 16
+
+                clip: true
+
+                model:
+                    messageModel
+
+                spacing:
+                    root.fullscreen
+                    ? 22
+                    : 18
+
+                boundsBehavior:
+                    Flickable.StopAtBounds
+
+                ScrollBar.vertical:
+                    ScrollBar {
+                        policy:
+                            ScrollBar.AsNeeded
+                    }
+
+                // ==================================================
+                // EMPTY STATE
+                // ==================================================
+
+                Text {
+
+                    anchors.centerIn: parent
+
+                    visible:
+                        messageModel.count === 0
+
+                    text:
+                        "AWAITING COMMAND"
+
+                    color:
+                        Theme.textSecondary
+
+                    opacity: 0.28
+
+                    font.pixelSize: 10
+
+                    font.bold: true
+
+                    font.letterSpacing: 3
+                }
+
+                // ==================================================
+                // MESSAGE DELEGATE
+                // ==================================================
+
+                delegate: Item {
+
+                    id: messageDelegate
+
+                    width:
+                        messageList.width
+
+                    height:
+                        messageContent.height + 12
+
+                    property bool isUser:
+                        role === "user"
+
+                    property real maximumBubbleWidth:
+                        messageList.width *
+                        (
+                            root.fullscreen
+                            ? 0.78
+                            : 0.82
+                        )
+
+                    opacity: 0
+
+                    transform:
+                        Translate {
+
+                            x:
+                                messageDelegate.isUser
+                                ? 16
+                                : -16
+                        }
+
+                    Component.onCompleted: {
+
+                        messageDelegate.opacity = 1
+
+                        messageDelegate.x = 0
+                    }
+
+                    Behavior on opacity {
+
+                        NumberAnimation {
+
+                            duration: 280
+
+                            easing.type:
+                                Easing.OutCubic
                         }
                     }
 
-                    Rectangle {
+                    Behavior on x {
 
-                        id: messageBubble
+                        NumberAnimation {
+
+                            duration: 280
+
+                            easing.type:
+                                Easing.OutCubic
+                        }
+                    }
+
+                    Column {
+
+                        id: messageContent
 
                         width:
                             Math.min(
@@ -804,545 +1027,330 @@ Item {
                                 )
                             )
 
-                        height:
-                            Math.max(
-                                root.fullscreen
-                                ? 52
-                                : 48,
-                                messageText.implicitHeight + 22
-                            )
-
                         anchors.right:
                             messageDelegate.isUser
                             ? parent.right
                             : undefined
 
-                        radius:
-                            root.fullscreen
-                            ? 15
-                            : 13
-
-                        color:
+                        anchors.left:
                             messageDelegate.isUser
-                            ? Qt.rgba(
-                                0.10,
-                                0.14,
-                                0.21,
-                                0.72
-                            )
-                            : Qt.rgba(
-                                0.05,
-                                0.08,
-                                0.14,
-                                0.82
-                            )
+                            ? undefined
+                            : parent.left
 
-                        border.width: 1
+                        spacing: 6
 
-                        border.color:
-                            messageDelegate.isUser
-                            ? Qt.rgba(
-                                1,
-                                1,
-                                1,
-                                0.055
-                            )
-                            : Qt.rgba(
-                                root.stateColor.r,
-                                root.stateColor.g,
-                                root.stateColor.b,
-                                0.16
-                            )
+                        // ------------------------------------------
+                        // META
+                        // ------------------------------------------
+
+                        Row {
+
+                            spacing: 8
+
+                            anchors.right:
+                                messageDelegate.isUser
+                                ? parent.right
+                                : undefined
+
+                            Text {
+
+                                text:
+                                    messageDelegate.isUser
+                                    ? "YOU"
+                                    : "KRAKKEN"
+
+                                color:
+                                    messageDelegate.isUser
+                                    ? Theme.textSecondary
+                                    : root.stateColor
+
+                                font.pixelSize: 8
+
+                                font.bold: true
+
+                                font.letterSpacing: 2
+
+                                opacity:
+                                    messageDelegate.isUser
+                                    ? 0.65
+                                    : 0.9
+                            }
+
+                            Text {
+
+                                visible:
+                                    root.showTimestamps
+
+                                text:
+                                    timestamp
+
+                                color:
+                                    Theme.textSecondary
+
+                                font.pixelSize: 8
+
+                                opacity: 0.3
+                            }
+                        }
+
+                        // ------------------------------------------
+                        // BUBBLE
+                        // ------------------------------------------
 
                         Rectangle {
 
-                            visible:
-                                !messageDelegate.isUser
+                            id: messageBubble
 
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
+                            width:
+                                Math.min(
+                                    messageDelegate.maximumBubbleWidth,
+                                    Math.max(
+                                        160,
+                                        messageText.implicitWidth + 30
+                                    )
+                                )
 
-                            width: 2
+                            height:
+                                Math.max(
+                                    root.fullscreen
+                                    ? 52
+                                    : 48,
+                                    messageText.implicitHeight + 22
+                                )
 
-                            radius: 1
+                            anchors.right:
+                                messageDelegate.isUser
+                                ? parent.right
+                                : undefined
 
-                            color:
-                                root.stateColor
-
-                            opacity: 0.7
-                        }
-
-                        Text {
-
-                            id: messageText
-
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-
-                            anchors.leftMargin:
+                            radius:
                                 root.fullscreen
-                                ? 17
-                                : 15
-
-                            anchors.rightMargin:
-                                root.fullscreen
-                                ? 17
-                                : 15
-
-                            anchors.topMargin: 11
-                            anchors.bottomMargin: 11
-
-                            text:
-                                message
-
-                            color:
-                                Theme.textPrimary
-
-                            font.pixelSize:
-                                root.fullscreen
-                                ? 14
+                                ? 15
                                 : 13
 
-                            lineHeight: 1.4
-
-                            wrapMode:
-                                Text.Wrap
-
-                            textFormat:
-                                Text.PlainText
-
-                            horizontalAlignment:
+                            color:
                                 messageDelegate.isUser
-                                ? Text.AlignRight
-                                : Text.AlignLeft
+                                ? Qt.rgba(
+                                    0.10,
+                                    0.14,
+                                    0.21,
+                                    0.72
+                                )
+                                : Qt.rgba(
+                                    0.05,
+                                    0.08,
+                                    0.14,
+                                    0.82
+                                )
 
-                            verticalAlignment:
-                                Text.AlignVCenter
+                            border.width: 1
+
+                            border.color:
+                                messageDelegate.isUser
+                                ? Qt.rgba(
+                                    1,
+                                    1,
+                                    1,
+                                    0.055
+                                )
+                                : Qt.rgba(
+                                    root.stateColor.r,
+                                    root.stateColor.g,
+                                    root.stateColor.b,
+                                    0.16
+                                )
+
+                            Rectangle {
+
+                                visible:
+                                    !messageDelegate.isUser
+
+                                anchors.left:
+                                    parent.left
+
+                                anchors.top:
+                                    parent.top
+
+                                anchors.bottom:
+                                    parent.bottom
+
+                                width: 2
+
+                                radius: 1
+
+                                color:
+                                    root.stateColor
+
+                                opacity: 0.7
+                            }
+
+                            Text {
+
+                                id: messageText
+
+                                anchors.left:
+                                    parent.left
+
+                                anchors.right:
+                                    parent.right
+
+                                anchors.top:
+                                    parent.top
+
+                                anchors.bottom:
+                                    parent.bottom
+
+                                anchors.leftMargin:
+                                    root.fullscreen
+                                    ? 17
+                                    : 15
+
+                                anchors.rightMargin:
+                                    root.fullscreen
+                                    ? 17
+                                    : 15
+
+                                anchors.topMargin: 11
+                                anchors.bottomMargin: 11
+
+                                text:
+                                    message
+
+                                color:
+                                    Theme.textPrimary
+
+                                font.pixelSize:
+                                    root.fullscreen
+                                    ? 14
+                                    : 13
+
+                                lineHeight:
+                                    1.4
+
+                                wrapMode:
+                                    Text.Wrap
+
+                                textFormat:
+                                    Text.PlainText
+
+                                horizontalAlignment:
+                                    messageDelegate.isUser
+                                    ? Text.AlignRight
+                                    : Text.AlignLeft
+
+                                verticalAlignment:
+                                    Text.AlignVCenter
+                            }
                         }
                     }
                 }
-            }
 
-            // ==================================================
-            // THINKING INDICATOR
-            // ==================================================
+                // ==================================================
+                // THINKING INDICATOR
+                // ==================================================
 
-            footer: Item {
+                footer: Item {
 
-                width:
-                    messageList.width
+                    width:
+                        messageList.width
 
-                height:
-                    root.state === "thinking" ||
-                    root.state === "processing"
-                    ? 44
-                    : 0
+                    height:
+                        root.state === "thinking" ||
+                        root.state === "processing"
+                        ? 44
+                        : 0
 
-                visible:
-                    root.state === "thinking" ||
-                    root.state === "processing"
-
-                Row {
-
-                    anchors.left:
-                        parent.left
-
-                    anchors.leftMargin: 4
-
-                    anchors.verticalCenter:
-                        parent.verticalCenter
-
-                    spacing: 8
-
-                    Text {
-
-                        text:
-                            root.state === "processing"
-                            ? "PROCESSING"
-                            : "THINKING"
-
-                        color:
-                            root.stateColor
-
-                        font.pixelSize: 8
-
-                        font.bold: true
-
-                        font.letterSpacing: 2
-
-                        opacity: 0.75
-                    }
+                    visible:
+                        root.state === "thinking" ||
+                        root.state === "processing"
 
                     Row {
 
-                        spacing: 4
+                        anchors.left:
+                            parent.left
+
+                        anchors.leftMargin: 4
 
                         anchors.verticalCenter:
                             parent.verticalCenter
 
-                        Repeater {
+                        spacing: 8
 
-                            model: 3
+                        Text {
 
-                            delegate:
-                                Rectangle {
+                            text:
+                                root.state === "processing"
+                                ? "PROCESSING"
+                                : "THINKING"
 
-                                    width: 4
-                                    height: 4
+                            color:
+                                root.stateColor
 
-                                    radius: 2
+                            font.pixelSize: 8
 
-                                    color:
-                                        root.stateColor
+                            font.bold: true
 
-                                    opacity: 0.25
+                            font.letterSpacing: 2
 
-                                    SequentialAnimation on opacity {
+                            opacity: 0.75
+                        }
 
-                                        running: true
+                        Row {
 
-                                        loops:
-                                            Animation.Infinite
+                            spacing: 4
 
-                                        PauseAnimation {
-                                            duration:
-                                                index * 160
-                                        }
+                            anchors.verticalCenter:
+                                parent.verticalCenter
 
-                                        NumberAnimation {
-                                            from: 0.25
-                                            to: 1
-                                            duration: 320
-                                        }
+                            Repeater {
 
-                                        NumberAnimation {
-                                            from: 1
-                                            to: 0.25
-                                            duration: 320
+                                model: 3
+
+                                delegate:
+                                    Rectangle {
+
+                                        width: 4
+                                        height: 4
+
+                                        radius: 2
+
+                                        color:
+                                            root.stateColor
+
+                                        opacity: 0.25
+
+                                        SequentialAnimation on opacity {
+
+                                            running: true
+
+                                            loops:
+                                                Animation.Infinite
+
+                                            PauseAnimation {
+                                                duration:
+                                                    index * 160
+                                            }
+
+                                            NumberAnimation {
+                                                from: 0.25
+                                                to: 1
+                                                duration: 320
+                                            }
+
+                                            NumberAnimation {
+                                                from: 1
+                                                to: 0.25
+                                                duration: 320
+                                            }
                                         }
                                     }
-                                }
+                            }
                         }
                     }
                 }
-            }
 
-            onCountChanged:
-                root.scrollToBottom()
-        }
-
-        // ======================================================
-        // KEY HIGHLIGHTS
-        //
-        // Temporary AI briefing displayed before the response.
-        // ======================================================
-
-        Rectangle {
-
-            id: highlightsCard
-
-            visible:
-                root.highlightsVisible
-
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-
-            anchors.leftMargin:
-                root.fullscreen
-                ? 42
-                : 22
-
-            anchors.rightMargin:
-                root.fullscreen
-                ? 42
-                : 18
-
-            anchors.bottomMargin:
-                root.fullscreen
-                ? 24
-                : 16
-
-            height:
-                highlightsColumn.implicitHeight +
-                28
-
-            radius:
-                root.fullscreen
-                ? 17
-                : 15
-
-            color:
-                Qt.rgba(
-                    0.065,
-                    0.09,
-                    0.15,
-                    0.985
-                )
-
-            border.width: 1
-
-            border.color:
-                Qt.rgba(
-                    root.stateColor.r,
-                    root.stateColor.g,
-                    root.stateColor.b,
-                    0.26
-                )
-
-            z: 20
-
-            opacity:
-                root.highlightsVisible
-                ? 1
-                : 0
-
-            transform:
-                Translate {
-
-                    y:
-                        root.highlightsVisible
-                        ? 0
-                        : 12
-                }
-
-            Behavior on opacity {
-
-                NumberAnimation {
-
-                    duration: 220
-
-                    easing.type:
-                        Easing.OutCubic
-                }
-            }
-
-            Behavior on y {
-
-                NumberAnimation {
-
-                    duration: 220
-
-                    easing.type:
-                        Easing.OutCubic
-                }
-            }
-
-            // --------------------------------------------------
-            // LEFT ACCENT
-            // --------------------------------------------------
-
-            Rectangle {
-
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-
-                width: 3
-
-                radius: 1.5
-
-                color:
-                    root.stateColor
-
-                opacity: 0.8
-            }
-
-            // --------------------------------------------------
-            // TOP GLOW
-            // --------------------------------------------------
-
-            Rectangle {
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-
-                height: 1
-
-                color:
-                    Qt.rgba(
-                        root.stateColor.r,
-                        root.stateColor.g,
-                        root.stateColor.b,
-                        0.35
-                    )
-            }
-
-            Column {
-
-                id: highlightsColumn
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-
-                anchors.leftMargin:
-                    root.fullscreen
-                    ? 20
-                    : 18
-
-                anchors.rightMargin:
-                    root.fullscreen
-                    ? 20
-                    : 18
-
-                anchors.topMargin: 14
-
-                spacing: 8
-
-                // --------------------------------------------------
-                // HEADER
-                // --------------------------------------------------
-
-                RowLayout {
-
-                    width: parent.width
-
-                    spacing: 8
-
-                    Text {
-
-                        text: "✦"
-
-                        color:
-                            root.stateColor
-
-                        font.pixelSize:
-                            root.fullscreen
-                            ? 14
-                            : 13
-
-                        Layout.alignment:
-                            Qt.AlignVCenter
-                    }
-
-                    Text {
-
-                        text:
-                            "KEY HIGHLIGHTS"
-
-                        color:
-                            Theme.textPrimary
-
-                        font.pixelSize:
-                            root.fullscreen
-                            ? 9
-                            : 8
-
-                        font.bold: true
-
-                        font.letterSpacing: 2.2
-
-                        Layout.fillWidth: true
-
-                        Layout.alignment:
-                            Qt.AlignVCenter
-                    }
-
-                    Rectangle {
-
-                        width: 6
-                        height: 6
-
-                        radius: 3
-
-                        color:
-                            root.stateColor
-
-                        opacity: 0.8
-
-                        Layout.alignment:
-                            Qt.AlignVCenter
-                    }
-                }
-
-                // --------------------------------------------------
-                // HIGHLIGHT CONTENT
-                // --------------------------------------------------
-
-                Text {
-
-                    width:
-                        parent.width
-
-                    text:
-                        root.currentHighlights
-
-                    color:
-                        Theme.textPrimary
-
-                    font.pixelSize:
-                        root.fullscreen
-                        ? 13
-                        : 12
-
-                    lineHeight:
-                        1.35
-
-                    wrapMode:
-                        Text.Wrap
-
-                    textFormat:
-                        Text.PlainText
-
-                    maximumLineCount: 4
-
-                    elide:
-                        Text.ElideRight
-                }
-
-                // --------------------------------------------------
-                // FOOTER
-                // --------------------------------------------------
-
-                RowLayout {
-
-                    width: parent.width
-
-                    spacing: 6
-
-                    Text {
-
-                        text:
-                            "AI BRIEFING"
-
-                        color:
-                            root.stateColor
-
-                        font.pixelSize: 7
-
-                        font.bold: true
-
-                        font.letterSpacing: 1.5
-
-                        opacity: 0.7
-                    }
-
-                    Item {
-                        Layout.fillWidth: true
-                    }
-
-                    Text {
-
-                        text:
-                            "FULL RESPONSE ↓"
-
-                        color:
-                            Theme.textSecondary
-
-                        font.pixelSize: 7
-
-                        font.bold: true
-
-                        font.letterSpacing: 1
-
-                        opacity: 0.45
-                    }
-                }
+                onCountChanged:
+                    root.scrollToBottom()
             }
         }
     }
@@ -1428,7 +1436,7 @@ Item {
     }
 
     // ==========================================================
-    // HIGHLIGHT API
+    // HIGHLIGHTS API
     // ==========================================================
 
     function showAIHighlights(text) {
@@ -1439,21 +1447,63 @@ Item {
         )
             return
 
-        root.currentHighlights =
+        var normalized =
             text.trim()
 
-        // Keep the latest highlight visible.
-        // The response itself will begin immediately afterward.
-        root.scrollToBottom()
+        root.currentHighlights =
+            normalized
+
+        var lines =
+            normalized.split(/\r?\n/)
+
+        var parsed = []
+
+        for (
+            var i = 0;
+            i < lines.length;
+            i++
+        ) {
+
+            var line =
+                lines[i].trim()
+
+            if (!line)
+                continue
+
+            // Remove common bullet formats.
+            line = line.replace(
+                /^[•●▪◦‣\-*]\s*/,
+                ""
+            )
+
+            if (!line)
+                continue
+
+            parsed.push(
+                line
+            )
+        }
+
+        if (parsed.length === 0) {
+
+            parsed.push(
+                normalized
+            )
+        }
+
+        root.highlightItems =
+            parsed
     }
 
     function clearHighlights() {
 
         root.currentHighlights = ""
+
+        root.highlightItems = []
     }
 
     // ==========================================================
-    // STREAMING API
+    // STREAMING
     // ==========================================================
 
     function startStreaming() {
@@ -1461,8 +1511,6 @@ Item {
         if (root.streaming)
             return
 
-        // Highlights have served their purpose once
-        // the actual response begins.
         root.clearHighlights()
 
         messageModel.append({
@@ -1731,7 +1779,7 @@ Item {
     }
 
     // ==========================================================
-    // ESCAPE KEY
+    // ESCAPE
     // ==========================================================
 
     Keys.onEscapePressed: {
