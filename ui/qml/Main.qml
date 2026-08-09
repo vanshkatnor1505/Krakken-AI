@@ -22,11 +22,13 @@ ApplicationWindow {
 
     color: Theme.background
 
+
     // ==========================================================
     // AI STATE
     // ==========================================================
 
     property string aiState: "idle"
+
 
     // ==========================================================
     // AMBIENT BACKGROUND
@@ -45,6 +47,7 @@ ApplicationWindow {
         intensity: 1.0
     }
 
+
     // ==========================================================
     // APPLICATION LAYOUT
     // ==========================================================
@@ -57,6 +60,7 @@ ApplicationWindow {
 
         z: 10
 
+
         // ======================================================
         // TOP BAR
         // ======================================================
@@ -67,6 +71,7 @@ ApplicationWindow {
 
             Layout.preferredHeight: 60
         }
+
 
         // ======================================================
         // MAIN AREA
@@ -80,6 +85,7 @@ ApplicationWindow {
 
             spacing: 0
 
+
             // ==================================================
             // SIDEBAR
             // ==================================================
@@ -90,6 +96,7 @@ ApplicationWindow {
 
                 Layout.preferredWidth: 90
             }
+
 
             // ==================================================
             // CENTER + CHAT
@@ -103,6 +110,7 @@ ApplicationWindow {
 
                 spacing: 18
 
+
                 // ==================================================
                 // AI CORE
                 // ==================================================
@@ -114,6 +122,7 @@ ApplicationWindow {
                     Layout.fillHeight: true
 
                     Layout.minimumWidth: 600
+
 
                     AIOrb {
 
@@ -128,6 +137,7 @@ ApplicationWindow {
                         state: window.aiState
                     }
 
+
                     Text {
 
                         anchors.horizontalCenter:
@@ -137,6 +147,7 @@ ApplicationWindow {
                             aiOrb.bottom
 
                         anchors.topMargin: 8
+
 
                         text: {
 
@@ -162,6 +173,7 @@ ApplicationWindow {
                             }
                         }
 
+
                         color: {
 
                             switch (window.aiState) {
@@ -186,6 +198,7 @@ ApplicationWindow {
                             }
                         }
 
+
                         font.pixelSize: 11
 
                         font.bold: true
@@ -195,6 +208,7 @@ ApplicationWindow {
                         opacity: 0.8
                     }
                 }
+
 
                 // ==================================================
                 // CHAT PANEL
@@ -210,6 +224,7 @@ ApplicationWindow {
 
                     Layout.maximumWidth: 560
 
+
                     ChatView {
 
                         id: chatView
@@ -222,6 +237,7 @@ ApplicationWindow {
 
                         state: window.aiState
 
+
                         onClearRequested: {
 
                             assistantBridge.clearConversation()
@@ -230,6 +246,7 @@ ApplicationWindow {
                 }
             }
         }
+
 
         // ======================================================
         // COMMAND DOCK
@@ -240,6 +257,7 @@ ApplicationWindow {
             Layout.fillWidth: true
 
             Layout.preferredHeight: 108
+
 
             Rectangle {
 
@@ -256,20 +274,24 @@ ApplicationWindow {
                 opacity: 0.65
             }
 
+
             CommandCenter {
 
                 id: commandCenter
 
                 anchors.centerIn: parent
 
+
                 width: Math.min(
                     parent.width - 180,
                     760
                 )
 
+
                 height: 72
 
                 state: window.aiState
+
 
                 onCommandSubmitted: function(command) {
 
@@ -280,7 +302,10 @@ ApplicationWindow {
                         return
                     }
 
-                    var cleanCommand = command.trim()
+
+                    var cleanCommand =
+                        command.trim()
+
 
                     // ------------------------------------------------
                     // Display user message immediately.
@@ -289,6 +314,7 @@ ApplicationWindow {
                     chatView.addUserMessage(
                         cleanCommand
                     )
+
 
                     // ------------------------------------------------
                     // Send to Python backend.
@@ -300,6 +326,7 @@ ApplicationWindow {
                 }
             }
         }
+
 
         // ======================================================
         // STATUS BAR
@@ -313,6 +340,7 @@ ApplicationWindow {
         }
     }
 
+
     // ==========================================================
     // ASSISTANT BRIDGE CONNECTIONS
     // ==========================================================
@@ -320,6 +348,7 @@ ApplicationWindow {
     Connections {
 
         target: assistantBridge
+
 
         // ======================================================
         // STATE
@@ -332,10 +361,12 @@ ApplicationWindow {
                 state
             )
 
+
             window.aiState = state
 
             chatView.state = state
         }
+
 
         // ======================================================
         // RESPONSE STARTED
@@ -347,8 +378,10 @@ ApplicationWindow {
                 "QML RESPONSE STARTED"
             )
 
+
             chatView.startStreaming()
         }
+
 
         // ======================================================
         // RESPONSE CHUNK
@@ -363,10 +396,12 @@ ApplicationWindow {
                 return
             }
 
+
             chatView.appendStreamText(
                 chunk
             )
         }
+
 
         // ======================================================
         // RESPONSE FINISHED
@@ -378,8 +413,36 @@ ApplicationWindow {
                 "QML RESPONSE FINISHED"
             )
 
+
             chatView.finishStreaming()
         }
+
+
+        // ======================================================
+        // HIGHLIGHTS
+        // ======================================================
+
+        function onHighlightsReady(highlights) {
+
+            console.log(
+                "QML HIGHLIGHTS RECEIVED:",
+                highlights
+            )
+
+
+            if (
+                !highlights ||
+                highlights.length === 0
+            ) {
+                return
+            }
+
+
+            chatView.showHighlights(
+                highlights
+            )
+        }
+
 
         // ======================================================
         // ERROR
@@ -392,14 +455,16 @@ ApplicationWindow {
                 errorMessage
             )
 
+
             chatView.cancelStreaming()
+
 
             chatView.addAssistantMessage(
                 "Error: " + errorMessage
             )
 
+
             window.aiState = "error"
         }
     }
 }
-
