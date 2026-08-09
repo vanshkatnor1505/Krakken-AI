@@ -26,16 +26,16 @@ Item {
     property bool fullscreen: false
 
     // Backend bridge.
-    //
-    // Main.qml should assign:
-    //
-    // assistantBridge: assistantBridge
-    //
     property var assistantBridge: null
 
     // AI-generated highlights.
     property bool showHighlights: true
     property string currentHighlights: ""
+
+    // Controls whether the current highlight card is visible.
+    property bool highlightsVisible:
+        root.showHighlights &&
+        root.currentHighlights.length > 0
 
     signal messageSent(string message)
     signal clearRequested()
@@ -54,6 +54,7 @@ Item {
     // ==========================================================
 
     property color stateColor: {
+
         switch (root.state) {
 
         case "listening":
@@ -93,20 +94,10 @@ Item {
 
     // ==========================================================
     // ASSISTANT BRIDGE CONNECTION
-    //
-    // Python:
-    //
-    // AssistantBridge
-    //      ↓
-    // Qt signals
-    //      ↓
-    // Connections
-    //      ↓
-    // ChatView
-    //
     // ==========================================================
 
     Connections {
+
         id: assistantConnections
 
         target: root.assistantBridge
@@ -175,18 +166,38 @@ Item {
                 )
             }
         }
+
+        // ------------------------------------------------------
+        // AI HIGHLIGHTS
+        //
+        // THIS WAS THE MISSING CONNECTION.
+        //
+        // AssistantBridge:
+        //
+        //     highlightsReady(str)
+        //
+        // becomes:
+        //
+        //     ChatView.showAIHighlights(str)
+        // ------------------------------------------------------
+
+        function onHighlightsReady(highlights) {
+
+            if (!highlights)
+                return
+
+            root.showAIHighlights(
+                highlights
+            )
+        }
     }
 
     // ==========================================================
     // FOCUS MODE WINDOW
-    //
-    // Separate non-modal window.
-    //
-    // Main Kraken window remains usable.
-    // This is NOT desktop fullscreen.
     // ==========================================================
 
     Window {
+
         id: focusWindow
 
         visible: false
@@ -207,12 +218,13 @@ Item {
             Qt.WindowMaximizeButtonHint |
             Qt.WindowCloseButtonHint
 
-        color: Qt.rgba(
-            0.025,
-            0.04,
-            0.07,
-            1.0
-        )
+        color:
+            Qt.rgba(
+                0.025,
+                0.04,
+                0.07,
+                1.0
+            )
 
         modality: Qt.NonModal
 
@@ -224,14 +236,16 @@ Item {
         }
 
         Rectangle {
+
             anchors.fill: parent
 
-            color: Qt.rgba(
-                0.025,
-                0.04,
-                0.07,
-                1.0
-            )
+            color:
+                Qt.rgba(
+                    0.025,
+                    0.04,
+                    0.07,
+                    1.0
+                )
         }
     }
 
@@ -240,6 +254,7 @@ Item {
     // ==========================================================
 
     Rectangle {
+
         id: panel
 
         anchors.fill: parent
@@ -249,12 +264,13 @@ Item {
             ? 16
             : Theme.radiusLarge
 
-        color: Qt.rgba(
-            0.04,
-            0.07,
-            0.12,
-            0.94
-        )
+        color:
+            Qt.rgba(
+                0.04,
+                0.07,
+                0.12,
+                0.94
+            )
 
         border.width: 1
 
@@ -271,9 +287,11 @@ Item {
         // ======================================================
 
         Rectangle {
+
             id: header
 
-            visible: root.showHeader
+            visible:
+                root.showHeader
 
             anchors.top: parent.top
             anchors.left: parent.left
@@ -302,10 +320,6 @@ Item {
 
                 spacing: 12
 
-                // --------------------------------------------------
-                // STATUS DOT
-                // --------------------------------------------------
-
                 Rectangle {
 
                     Layout.alignment:
@@ -316,7 +330,8 @@ Item {
 
                     radius: 3.5
 
-                    color: root.stateColor
+                    color:
+                        root.stateColor
 
                     SequentialAnimation on opacity {
 
@@ -339,10 +354,6 @@ Item {
                         }
                     }
                 }
-
-                // --------------------------------------------------
-                // TITLE
-                // --------------------------------------------------
 
                 ColumnLayout {
 
@@ -388,10 +399,6 @@ Item {
                     }
                 }
 
-                // --------------------------------------------------
-                // MESSAGE COUNT
-                // --------------------------------------------------
-
                 Text {
 
                     Layout.alignment:
@@ -410,10 +417,6 @@ Item {
 
                     opacity: 0.55
                 }
-
-                // --------------------------------------------------
-                // FOCUS MODE BUTTON
-                // --------------------------------------------------
 
                 Rectangle {
 
@@ -463,10 +466,8 @@ Item {
                         cursorShape:
                             Qt.PointingHandCursor
 
-                        onClicked: {
-
+                        onClicked:
                             root.toggleFullscreen()
-                        }
                     }
 
                     ToolTip.visible:
@@ -477,10 +478,6 @@ Item {
                         ? "Return to normal chat"
                         : "Open Focus Mode"
                 }
-
-                // --------------------------------------------------
-                // CLEAR BUTTON
-                // --------------------------------------------------
 
                 Rectangle {
 
@@ -595,9 +592,20 @@ Item {
                 : 14
 
             anchors.bottomMargin:
-                root.fullscreen
-                ? 28
-                : 16
+                root.highlightsVisible
+                ? (
+                    highlightsCard.height +
+                    (
+                        root.fullscreen
+                        ? 36
+                        : 28
+                    )
+                )
+                : (
+                    root.fullscreen
+                    ? 28
+                    : 16
+                )
 
             clip: true
 
@@ -733,10 +741,6 @@ Item {
 
                     spacing: 6
 
-                    // --------------------------------------------------
-                    // META
-                    // --------------------------------------------------
-
                     Row {
 
                         spacing: 8
@@ -786,10 +790,6 @@ Item {
                             opacity: 0.3
                         }
                     }
-
-                    // --------------------------------------------------
-                    // BUBBLE
-                    // --------------------------------------------------
 
                     Rectangle {
 
@@ -906,8 +906,7 @@ Item {
                                 ? 14
                                 : 13
 
-                            lineHeight:
-                                1.4
+                            lineHeight: 1.4
 
                             wrapMode:
                                 Text.Wrap
@@ -1031,13 +1030,14 @@ Item {
                 }
             }
 
-            onCountChanged: {
+            onCountChanged:
                 root.scrollToBottom()
-            }
         }
 
         // ======================================================
-        // AI HIGHLIGHTS
+        // KEY HIGHLIGHTS
+        //
+        // Temporary AI briefing displayed before the response.
         // ======================================================
 
         Rectangle {
@@ -1045,8 +1045,7 @@ Item {
             id: highlightsCard
 
             visible:
-                root.showHighlights &&
-                root.currentHighlights.length > 0
+                root.highlightsVisible
 
             anchors.left: parent.left
             anchors.right: parent.right
@@ -1067,17 +1066,21 @@ Item {
                 ? 24
                 : 16
 
-            implicitHeight:
-                highlightsColumn.implicitHeight + 28
+            height:
+                highlightsColumn.implicitHeight +
+                28
 
-            radius: 16
+            radius:
+                root.fullscreen
+                ? 17
+                : 15
 
             color:
                 Qt.rgba(
-                    0.07,
-                    0.10,
-                    0.17,
-                    0.97
+                    0.065,
+                    0.09,
+                    0.15,
+                    0.985
                 )
 
             border.width: 1
@@ -1087,10 +1090,87 @@ Item {
                     root.stateColor.r,
                     root.stateColor.g,
                     root.stateColor.b,
-                    0.24
+                    0.26
                 )
 
             z: 20
+
+            opacity:
+                root.highlightsVisible
+                ? 1
+                : 0
+
+            transform:
+                Translate {
+
+                    y:
+                        root.highlightsVisible
+                        ? 0
+                        : 12
+                }
+
+            Behavior on opacity {
+
+                NumberAnimation {
+
+                    duration: 220
+
+                    easing.type:
+                        Easing.OutCubic
+                }
+            }
+
+            Behavior on y {
+
+                NumberAnimation {
+
+                    duration: 220
+
+                    easing.type:
+                        Easing.OutCubic
+                }
+            }
+
+            // --------------------------------------------------
+            // LEFT ACCENT
+            // --------------------------------------------------
+
+            Rectangle {
+
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+
+                width: 3
+
+                radius: 1.5
+
+                color:
+                    root.stateColor
+
+                opacity: 0.8
+            }
+
+            // --------------------------------------------------
+            // TOP GLOW
+            // --------------------------------------------------
+
+            Rectangle {
+
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+
+                height: 1
+
+                color:
+                    Qt.rgba(
+                        root.stateColor.r,
+                        root.stateColor.g,
+                        root.stateColor.b,
+                        0.35
+                    )
+            }
 
             Column {
 
@@ -1100,13 +1180,27 @@ Item {
                 anchors.right: parent.right
                 anchors.top: parent.top
 
-                anchors.leftMargin: 18
-                anchors.rightMargin: 18
+                anchors.leftMargin:
+                    root.fullscreen
+                    ? 20
+                    : 18
+
+                anchors.rightMargin:
+                    root.fullscreen
+                    ? 20
+                    : 18
+
                 anchors.topMargin: 14
 
                 spacing: 8
 
-                Row {
+                // --------------------------------------------------
+                // HEADER
+                // --------------------------------------------------
+
+                RowLayout {
+
+                    width: parent.width
 
                     spacing: 8
 
@@ -1117,7 +1211,13 @@ Item {
                         color:
                             root.stateColor
 
-                        font.pixelSize: 13
+                        font.pixelSize:
+                            root.fullscreen
+                            ? 14
+                            : 13
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
                     }
 
                     Text {
@@ -1126,15 +1226,43 @@ Item {
                             "KEY HIGHLIGHTS"
 
                         color:
-                            root.stateColor
+                            Theme.textPrimary
 
-                        font.pixelSize: 8
+                        font.pixelSize:
+                            root.fullscreen
+                            ? 9
+                            : 8
 
                         font.bold: true
 
-                        font.letterSpacing: 2
+                        font.letterSpacing: 2.2
+
+                        Layout.fillWidth: true
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
+                    }
+
+                    Rectangle {
+
+                        width: 6
+                        height: 6
+
+                        radius: 3
+
+                        color:
+                            root.stateColor
+
+                        opacity: 0.8
+
+                        Layout.alignment:
+                            Qt.AlignVCenter
                     }
                 }
+
+                // --------------------------------------------------
+                // HIGHLIGHT CONTENT
+                // --------------------------------------------------
 
                 Text {
 
@@ -1152,10 +1280,14 @@ Item {
                         ? 13
                         : 12
 
-                    lineHeight: 1.35
+                    lineHeight:
+                        1.35
 
                     wrapMode:
                         Text.Wrap
+
+                    textFormat:
+                        Text.PlainText
 
                     maximumLineCount: 4
 
@@ -1163,17 +1295,53 @@ Item {
                         Text.ElideRight
                 }
 
-                Text {
+                // --------------------------------------------------
+                // FOOTER
+                // --------------------------------------------------
 
-                    text:
-                        "Full response continues below ↓"
+                RowLayout {
 
-                    color:
-                        Theme.textSecondary
+                    width: parent.width
 
-                    font.pixelSize: 9
+                    spacing: 6
 
-                    opacity: 0.55
+                    Text {
+
+                        text:
+                            "AI BRIEFING"
+
+                        color:
+                            root.stateColor
+
+                        font.pixelSize: 7
+
+                        font.bold: true
+
+                        font.letterSpacing: 1.5
+
+                        opacity: 0.7
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                    }
+
+                    Text {
+
+                        text:
+                            "FULL RESPONSE ↓"
+
+                        color:
+                            Theme.textSecondary
+
+                        font.pixelSize: 7
+
+                        font.bold: true
+
+                        font.letterSpacing: 1
+
+                        opacity: 0.45
+                    }
                 }
             }
         }
@@ -1273,6 +1441,10 @@ Item {
 
         root.currentHighlights =
             text.trim()
+
+        // Keep the latest highlight visible.
+        // The response itself will begin immediately afterward.
+        root.scrollToBottom()
     }
 
     function clearHighlights() {
@@ -1289,6 +1461,8 @@ Item {
         if (root.streaming)
             return
 
+        // Highlights have served their purpose once
+        // the actual response begins.
         root.clearHighlights()
 
         messageModel.append({
