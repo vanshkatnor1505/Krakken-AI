@@ -1,8 +1,8 @@
 
 """
-AI provider abstraction for Kraken AI.
+AI provider abstraction for Krakken AI.
 
-The application communicates with providers through this module
+The application communicates with AI providers through this module
 instead of coupling the rest of the application directly to
 Groq's SDK.
 """
@@ -35,7 +35,6 @@ class AIProvider(ABC):
         """
         Execute a normal, non-streaming chat request.
         """
-
         raise NotImplementedError
 
     @abstractmethod
@@ -46,13 +45,12 @@ class AIProvider(ABC):
         """
         Execute a streaming chat request.
         """
-
         raise NotImplementedError
 
 
 class GroqProvider(AIProvider):
     """
-    Groq implementation of the Kraken AI provider.
+    Groq implementation of the Krakken AI provider.
 
     Configuration comes from AppConfig:
 
@@ -81,7 +79,6 @@ class GroqProvider(AIProvider):
             from groq import Groq
 
         except ImportError as exc:
-
             raise AIProviderError(
                 "Groq SDK is not installed. "
                 "Run: pip install groq"
@@ -92,25 +89,22 @@ class GroqProvider(AIProvider):
         )
 
         self._model = model
-
         self._logger = logger
 
         self._log(
             f"Groq provider initialized with model: {model}"
         )
 
-    # ======================================================
+    # ==========================================================
     # NORMAL CHAT
-    # ======================================================
+    # ==========================================================
 
     def chat(
         self,
         messages: Sequence[ChatMessage],
     ) -> AIResponse:
 
-        self._validate_messages(
-            messages
-        )
+        self._validate_messages(messages)
 
         payload = [
             message.to_dict()
@@ -118,23 +112,26 @@ class GroqProvider(AIProvider):
         ]
 
         try:
-
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=payload,
             )
 
         except Exception as exc:
-
-            self._raise_provider_error(
-                exc
-            )
+            self._raise_provider_error(exc)
 
         try:
+            if not response.choices:
+                raise AIProviderError(
+                    "Groq returned no choices."
+                )
 
             choice = response.choices[0]
 
-            content = choice.message.content or ""
+            content = (
+                choice.message.content
+                or ""
+            )
 
             finish_reason = getattr(
                 choice,
@@ -186,24 +183,24 @@ class GroqProvider(AIProvider):
                 usage=usage,
             )
 
-        except Exception as exc:
+        except AIProviderError:
+            raise
 
+        except Exception as exc:
             raise AIProviderError(
                 f"Invalid response from Groq: {exc}"
             ) from exc
 
-    # ======================================================
+    # ==========================================================
     # STREAMING CHAT
-    # ======================================================
+    # ==========================================================
 
     def stream(
         self,
         messages: Sequence[ChatMessage],
     ) -> Iterator[AIChunk]:
 
-        self._validate_messages(
-            messages
-        )
+        self._validate_messages(messages)
 
         payload = [
             message.to_dict()
@@ -212,13 +209,17 @@ class GroqProvider(AIProvider):
 
         try:
 
-            stream = self._client.chat.completions.create(
-                model=self._model,
-                messages=payload,
-                stream=True,
+            response_stream = (
+                self._client.chat.completions.create(
+                    model=self._model,
+                    messages=payload,
+                    stream=True,
+                )
             )
 
-            for chunk in stream:
+            finished = False
+
+            for chunk in response_stream:
 
                 if not chunk.choices:
                     continue
@@ -246,15 +247,25 @@ class GroqProvider(AIProvider):
                     None,
                 )
 
+                # --------------------------------------------------
+                # Content must ALWAYS be delivered before finished.
+                # --------------------------------------------------
+
                 if content:
 
                     yield AIChunk(
                         content=content,
                         finished=False,
-                        finish_reason=finish_reason,
+                        finish_reason=None,
                     )
 
+                # --------------------------------------------------
+                # Groq signals completion with finish_reason.
+                # --------------------------------------------------
+
                 if finish_reason:
+
+                    finished = True
 
                     yield AIChunk(
                         content="",
@@ -262,15 +273,32 @@ class GroqProvider(AIProvider):
                         finish_reason=finish_reason,
                     )
 
+                    break
+
+            # ------------------------------------------------------
+            # Safety fallback.
+            #
+            # Some provider implementations may close the stream
+            # without providing a finish_reason.
+            # ------------------------------------------------------
+
+            if not finished:
+
+                yield AIChunk(
+                    content="",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        except AIProviderError:
+            raise
+
         except Exception as exc:
+            self._raise_provider_error(exc)
 
-            self._raise_provider_error(
-                exc
-            )
-
-    # ======================================================
+    # ==========================================================
     # VALIDATION
-    # ======================================================
+    # ==========================================================
 
     @staticmethod
     def _validate_messages(
@@ -299,9 +327,9 @@ class GroqProvider(AIProvider):
                     "Chat messages cannot contain empty content."
                 )
 
-    # ======================================================
+    # ==========================================================
     # ERROR HANDLING
-    # ======================================================
+    # ==========================================================
 
     def _raise_provider_error(
         self,
@@ -320,9 +348,9 @@ class GroqProvider(AIProvider):
             f"Groq request failed: {message}"
         ) from exc
 
-    # ======================================================
+    # ==========================================================
     # LOGGING
-    # ======================================================
+    # ==========================================================
 
     def _log(
         self,
@@ -336,17 +364,12 @@ class GroqProvider(AIProvider):
         try:
 
             if error:
-
-                self._logger.error(
-                    message
-                )
+                self._logger.error(message)
 
             else:
-
-                self._logger.info(
-                    message
-                )
+                self._logger.info(message)
 
         except Exception:
+            # Logging must never crash the provider.
             pass
 
