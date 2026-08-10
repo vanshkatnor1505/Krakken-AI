@@ -1,6 +1,5 @@
-
 """
-Data models used by the Kraken AI engine.
+Data models used by the Krakken AI engine.
 """
 
 from __future__ import annotations
@@ -23,9 +22,7 @@ class ChatMessage:
     """
 
     role: Role
-
     content: str
-
     name: str | None = None
 
     def to_dict(self) -> dict[str, str]:
@@ -34,7 +31,7 @@ class ChatMessage:
         chat-completion providers.
         """
 
-        data = {
+        data: dict[str, str] = {
             "role": self.role,
             "content": self.content,
         }
@@ -52,13 +49,10 @@ class AIResponse:
     """
 
     content: str
-
     model: str
-
     finish_reason: str | None = None
-
     usage: dict[str, int] = field(
-        default_factory=dict,
+        default_factory=dict
     )
 
 
@@ -69,8 +63,5 @@ class AIChunk:
     """
 
     content: str
-
     finished: bool = False
-
     finish_reason: str | None = None
-
