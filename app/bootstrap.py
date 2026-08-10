@@ -1,4 +1,3 @@
-
 """
 Application bootstrap for Kraken AI.
 
@@ -20,7 +19,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from core.services.assistant_service import AssistantService
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
@@ -30,6 +28,7 @@ from app.config import config
 from core.ai.provider import GroqProvider
 from core.bridge.assistant_bridge import AssistantBridge
 from core.events.event_bus import event_bus
+from core.services.assistant_service import AssistantService
 from core.services.container import container
 from core.services.logger import log_manager
 
@@ -66,7 +65,7 @@ class ApplicationBootstrap:
         """
 
         # ------------------------------------------------------
-        # Logger
+        # LOGGER
         # ------------------------------------------------------
 
         log_manager.setup()
@@ -78,7 +77,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Core services
+        # CORE SERVICES
         # ------------------------------------------------------
 
         container.register_singleton(
@@ -101,7 +100,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Groq AI Provider
+        # GROQ AI PROVIDER
         # ------------------------------------------------------
 
         logger.info(
@@ -135,26 +134,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Assistant Service
-        # ------------------------------------------------------
-        #
-        # This is the AI orchestration layer.
-        #
-        # EventBus
-        #     ↓
-        # AssistantService
-        #     ↓
-        # GroqProvider
-        #
-        # AssistantService handles:
-        #
-        # - Conversation history
-        # - System prompt
-        # - AI requests
-        # - Streaming
-        # - AI response events
-        # - Error events
-        #
+        # ASSISTANT SERVICE
         # ------------------------------------------------------
 
         if self.provider is None:
@@ -183,21 +163,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Assistant Bridge
-        # ------------------------------------------------------
-        #
-        # The bridge connects:
-        #
-        # QML
-        #   ↕
-        # AssistantBridge
-        #   ↕
-        # EventBus
-        #   ↕
-        # AssistantService
-        #
-        # The bridge does NOT directly call Groq.
-        #
+        # ASSISTANT BRIDGE
         # ------------------------------------------------------
 
         logger.info(
@@ -219,7 +185,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Initialization complete
+        # COMPLETE
         # ------------------------------------------------------
 
         logger.success(
@@ -236,7 +202,7 @@ class ApplicationBootstrap:
         """
 
         # ------------------------------------------------------
-        # Initialize backend
+        # INITIALIZE BACKEND
         # ------------------------------------------------------
 
         self.initialize()
@@ -244,7 +210,7 @@ class ApplicationBootstrap:
         logger = log_manager.instance
 
         # ------------------------------------------------------
-        # Qt style
+        # QT STYLE
         # ------------------------------------------------------
 
         QQuickStyle.setStyle(
@@ -252,7 +218,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Qt application
+        # QT APPLICATION
         # ------------------------------------------------------
 
         self.app = QGuiApplication(
@@ -260,13 +226,13 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QML engine
+        # QML ENGINE
         # ------------------------------------------------------
 
         self.engine = QQmlApplicationEngine()
 
         # ------------------------------------------------------
-        # Project paths
+        # PROJECT PATHS
         # ------------------------------------------------------
 
         project_root = (
@@ -287,13 +253,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QML import path
-        # ------------------------------------------------------
-        #
-        # Allows:
-        #
-        # import Kraken
-        #
+        # QML IMPORT PATH
         # ------------------------------------------------------
 
         self.engine.addImportPath(
@@ -301,7 +261,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Validate QML root
+        # VALIDATE QML ROOT
         # ------------------------------------------------------
 
         if not qml_root.exists():
@@ -315,7 +275,7 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # Validate bridge
+        # VALIDATE BRIDGE
         # ------------------------------------------------------
 
         if self.bridge is None:
@@ -325,7 +285,7 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # Expose bridge to QML
+        # EXPOSE BRIDGE TO QML
         # ------------------------------------------------------
 
         self.engine.rootContext().setContextProperty(
@@ -338,7 +298,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Main QML
+        # MAIN QML
         # ------------------------------------------------------
 
         qml_file = (
@@ -361,7 +321,7 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # Load QML
+        # LOAD QML
         # ------------------------------------------------------
 
         self.engine.load(
@@ -371,7 +331,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Verify QML
+        # VERIFY QML
         # ------------------------------------------------------
 
         if not self.engine.rootObjects():
@@ -389,7 +349,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Application ready
+        # READY
         # ------------------------------------------------------
 
         logger.success(
@@ -401,8 +361,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # Qt event loop
+        # QT EVENT LOOP
         # ------------------------------------------------------
 
         return self.app.exec()
-
