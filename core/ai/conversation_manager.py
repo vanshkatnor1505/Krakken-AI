@@ -1,185 +1,68 @@
 """
-Conversation manager for Krakken AI.
-
-Maintains the current conversation history and prepares
-messages for the AI provider.
+Data models used by the Krakken AI engine.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Literal
 
-from core.ai.models import ChatMessage
+
+Role = Literal[
+    "system",
+    "user",
+    "assistant",
+    "tool",
+]
 
 
-class ConversationManager:
+@dataclass(slots=True)
+class ChatMessage:
     """
-    Manages the active AI conversation.
-
-    Conversation history is kept separate from persistent memory.
+    A single conversation message.
     """
 
-    def __init__(
-        self,
-        system_prompt: str,
-        max_messages: int = 40,
-    ) -> None:
+    role: Role
+    content: str
+    name: str | None = None
 
-        self.max_messages = max(
-            2,
-            max_messages,
-        )
-
-        self.system_message = ChatMessage(
-            role="system",
-            content=system_prompt,
-        )
-
-        self._messages: list[ChatMessage] = []
-
-        self.reset()
-
-    # ==========================================================
-    # RESET
-    # ==========================================================
-
-    def reset(self) -> None:
+    def to_dict(self) -> dict[str, str]:
         """
-        Start a fresh conversation.
+        Convert the message into the format expected by
+        chat-completion providers.
         """
 
-        self._messages.clear()
+        data: dict[str, str] = {
+            "role": self.role,
+            "content": self.content,
+        }
 
-        self._messages.append(
-            self.system_message
-        )
+        if self.name:
+            data["name"] = self.name
 
-    # ==========================================================
-    # ADD MESSAGE
-    # ==========================================================
+        return data
 
-    def add_user_message(
-        self,
-        content: str,
-    ) -> None:
 
-        content = content.strip()
+@dataclass(slots=True)
+class AIResponse:
+    """
+    Complete response returned by an AI provider.
+    """
 
-        if not content:
-            return
+    content: str
+    model: str
+    finish_reason: str | None = None
+    usage: dict[str, int] = field(
+        default_factory=dict
+    )
 
-        self._messages.append(
-            ChatMessage(
-                role="user",
-                content=content,
-            )
-        )
 
-        self._trim()
+@dataclass(slots=True)
+class AIChunk:
+    """
+    A streaming response chunk.
+    """
 
-    def add_assistant_message(
-        self,
-        content: str,
-    ) -> None:
-
-        content = content.strip()
-
-        if not content:
-            return
-
-        self._messages.append(
-            ChatMessage(
-                role="assistant",
-                content=content,
-            )
-        )
-
-        self._trim()
-
-    # ==========================================================
-    # HISTORY
-    # ==========================================================
-
-    def messages(self) -> Sequence[ChatMessage]:
-        """
-        Return the current conversation.
-
-        A tuple is returned so callers cannot accidentally
-        modify the internal history.
-        """
-
-        return tuple(
-            self._messages
-        )
-
-    # ==========================================================
-    # LAST MESSAGE
-    # ==========================================================
-
-    @property
-    def last_message(self) -> ChatMessage | None:
-
-        if not self._messages:
-            return None
-
-        return self._messages[-1]
-
-    # ==========================================================
-    # COUNT
-    # ==========================================================
-
-    @property
-    def count(self) -> int:
-
-        # Exclude the system prompt.
-        return max(
-            0,
-            len(self._messages) - 1,
-        )
-
-    # ==========================================================
-    # TRIM HISTORY
-    # ==========================================================
-
-    def _trim(self) -> None:
-        """
-        Keep the system prompt plus the most recent messages.
-        """
-
-        maximum_history = self.max_messages - 1
-
-        if len(self._messages) <= self.max_messages:
-            return
-
-        recent = self._messages[
-            -maximum_history:
-        ]
-
-        self._messages = [
-            self.system_message,
-            *recent,
-        ]
-
-    # ==========================================================
-    # EXPORT
-    # ==========================================================
-
-    def to_list(self) -> list[ChatMessage]:
-        """
-        Return a copy of the current conversation.
-        """
-
-        return list(
-            self._messages
-        )
-
-    # ==========================================================
-    # CLEAR
-    # ==========================================================
-
-    def clear(self) -> None:
-        """
-        Clear the conversation while preserving the system prompt.
-        """
-
-        self.reset()
+    content: str
+    finished: bool = False
+    finish_reason: str | None = None
