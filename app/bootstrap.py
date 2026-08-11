@@ -1,17 +1,20 @@
 """
-Application bootstrap for Kraken AI.
+Application bootstrap for Krakken AI.
 
 Responsible for:
 
 - Initializing core services
 - Registering dependencies
 - Creating the Groq AI provider
+- Creating the Kokoro TTS provider
+- Creating the AudioPlayer
 - Creating the AssistantService
 - Creating the AssistantBridge
 - Creating the Qt application
 - Creating the QML engine
 - Exposing backend services to QML
 - Loading the QML interface
+
 """
 
 from __future__ import annotations
@@ -31,28 +34,28 @@ from core.events.event_bus import event_bus
 from core.services.assistant_service import AssistantService
 from core.services.container import container
 from core.services.logger import log_manager
+from core.voice.audio_player import AudioPlayer
+from core.voice.providers.kokoro_provider import KokoroProvider
 
 
 class ApplicationBootstrap:
     """
-    Bootstraps the Kraken AI application.
+    Bootstraps the Krakken AI application.
     """
 
     def __init__(self) -> None:
 
         self.app: QGuiApplication | None = None
-
         self.engine: QQmlApplicationEngine | None = None
-
         self.window = None
 
-        # Strong references are important because these
-        # objects participate in the application lifecycle.
+        # Strong references are important because these objects
+        # participate in the application lifecycle.
 
         self.provider: GroqProvider | None = None
-
+        self.tts_provider: KokoroProvider | None = None
+        self.audio_player: AudioPlayer | None = None
         self.assistant_service: AssistantService | None = None
-
         self.bridge: AssistantBridge | None = None
 
     # ==========================================================
@@ -65,7 +68,7 @@ class ApplicationBootstrap:
         """
 
         # ------------------------------------------------------
-        # LOGGER
+        # Logger
         # ------------------------------------------------------
 
         log_manager.setup()
@@ -73,11 +76,11 @@ class ApplicationBootstrap:
         logger = log_manager.instance
 
         logger.info(
-            "Initializing Kraken AI..."
+            "Initializing Krakken AI..."
         )
 
         # ------------------------------------------------------
-        # CORE SERVICES
+        # Core services
         # ------------------------------------------------------
 
         container.register_singleton(
@@ -99,9 +102,9 @@ class ApplicationBootstrap:
             "Core services registered."
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # GROQ AI PROVIDER
-        # ------------------------------------------------------
+        # ======================================================
 
         logger.info(
             "Initializing Groq AI provider..."
@@ -133,24 +136,101 @@ class ApplicationBootstrap:
             f"{config.groq_model}"
         )
 
-        # ------------------------------------------------------
-        # ASSISTANT SERVICE
-        # ------------------------------------------------------
+        # ======================================================
+        # KOKORO TTS
+        # ======================================================
 
-        if self.provider is None:
+        logger.info(
+            "Initializing Kokoro TTS provider..."
+        )
 
-            raise RuntimeError(
-                "Groq provider was not initialized."
+        try:
+
+            self.tts_provider = KokoroProvider(
+                voice="af_heart",
+                speed=1.0,
+                logger=logger,
             )
+
+            self.tts_provider.initialize()
+
+        except Exception as exc:
+
+            logger.error(
+                f"Failed to initialize Kokoro TTS: {exc}"
+            )
+
+            raise
+
+        container.register_singleton(
+            "tts_provider",
+            self.tts_provider,
+        )
+
+        logger.success(
+            "Kokoro TTS provider initialized."
+        )
+
+        # ======================================================
+        # AUDIO PLAYER
+        # ======================================================
+
+        logger.info(
+            "Initializing AudioPlayer..."
+        )
+
+        try:
+
+            self.audio_player = AudioPlayer(
+                logger=logger,
+            )
+
+        except Exception as exc:
+
+            logger.error(
+                f"Failed to initialize AudioPlayer: {exc}"
+            )
+
+            raise
+
+        container.register_singleton(
+            "audio_player",
+            self.audio_player,
+        )
+
+        logger.success(
+            "AudioPlayer initialized."
+        )
+
+        # ======================================================
+        # ASSISTANT SERVICE
+        # ======================================================
 
         logger.info(
             "Initializing AssistantService..."
         )
 
+        if self.provider is None:
+            raise RuntimeError(
+                "Groq provider was not initialized."
+            )
+
+        if self.tts_provider is None:
+            raise RuntimeError(
+                "Kokoro TTS provider was not initialized."
+            )
+
+        if self.audio_player is None:
+            raise RuntimeError(
+                "AudioPlayer was not initialized."
+            )
+
         self.assistant_service = AssistantService(
             event_bus=event_bus,
             provider=self.provider,
             logger=logger,
+            tts_provider=self.tts_provider,
+            audio_player=self.audio_player,
         )
 
         container.register_singleton(
@@ -162,9 +242,9 @@ class ApplicationBootstrap:
             "Assistant service initialized."
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # ASSISTANT BRIDGE
-        # ------------------------------------------------------
+        # ======================================================
 
         logger.info(
             "Initializing AssistantBridge..."
@@ -184,9 +264,9 @@ class ApplicationBootstrap:
             "Assistant bridge initialized."
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # COMPLETE
-        # ------------------------------------------------------
+        # ======================================================
 
         logger.success(
             "Core services initialized successfully."
@@ -198,11 +278,11 @@ class ApplicationBootstrap:
 
     def run(self) -> int:
         """
-        Start the Kraken AI application.
+        Start the Krakken AI application.
         """
 
         # ------------------------------------------------------
-        # INITIALIZE BACKEND
+        # Initialize backend
         # ------------------------------------------------------
 
         self.initialize()
@@ -210,7 +290,7 @@ class ApplicationBootstrap:
         logger = log_manager.instance
 
         # ------------------------------------------------------
-        # QT STYLE
+        # Qt style
         # ------------------------------------------------------
 
         QQuickStyle.setStyle(
@@ -218,7 +298,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QT APPLICATION
+        # Qt application
         # ------------------------------------------------------
 
         self.app = QGuiApplication(
@@ -226,13 +306,13 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QML ENGINE
+        # QML engine
         # ------------------------------------------------------
 
         self.engine = QQmlApplicationEngine()
 
         # ------------------------------------------------------
-        # PROJECT PATHS
+        # Project paths
         # ------------------------------------------------------
 
         project_root = (
@@ -253,7 +333,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QML IMPORT PATH
+        # QML import path
         # ------------------------------------------------------
 
         self.engine.addImportPath(
@@ -261,7 +341,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # VALIDATE QML ROOT
+        # Validate QML root
         # ------------------------------------------------------
 
         if not qml_root.exists():
@@ -275,7 +355,7 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # VALIDATE BRIDGE
+        # Validate bridge
         # ------------------------------------------------------
 
         if self.bridge is None:
@@ -285,20 +365,29 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # EXPOSE BRIDGE TO QML
+        # Expose bridge to QML
+        #
+        # IMPORTANT:
+        #
+        # We intentionally use "krakkenBridge"
+        # instead of "assistantBridge".
+        #
+        # ChatView already has a property named
+        # assistantBridge, so using the same name
+        # caused QML scope resolution problems.
         # ------------------------------------------------------
 
         self.engine.rootContext().setContextProperty(
-            "assistantBridge",
+            "krakkenBridge",
             self.bridge,
         )
 
         logger.success(
-            "Assistant bridge exposed to QML."
+            "Assistant bridge exposed to QML as 'krakkenBridge'."
         )
 
         # ------------------------------------------------------
-        # MAIN QML
+        # Main QML
         # ------------------------------------------------------
 
         qml_file = (
@@ -321,7 +410,7 @@ class ApplicationBootstrap:
             )
 
         # ------------------------------------------------------
-        # LOAD QML
+        # Load QML
         # ------------------------------------------------------
 
         self.engine.load(
@@ -331,7 +420,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # VERIFY QML
+        # Verify QML
         # ------------------------------------------------------
 
         if not self.engine.rootObjects():
@@ -349,7 +438,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # READY
+        # Application ready
         # ------------------------------------------------------
 
         logger.success(
@@ -361,7 +450,7 @@ class ApplicationBootstrap:
         )
 
         # ------------------------------------------------------
-        # QT EVENT LOOP
+        # Qt event loop
         # ------------------------------------------------------
 
         return self.app.exec()
