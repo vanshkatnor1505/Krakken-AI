@@ -1,4 +1,3 @@
-
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -21,6 +20,22 @@ ApplicationWindow {
     title: "Krakken AI"
 
     color: Theme.background
+
+
+    // ==========================================================
+    // PYTHON BRIDGE
+    // ==========================================================
+
+    // IMPORTANT:
+    //
+    // Python exposes:
+    //
+    //     krakkenBridge
+    //
+    // We keep a separate local property so every child receives
+    // exactly the same Python object.
+
+    property var bridge: krakkenBridge
 
 
     // ==========================================================
@@ -237,10 +252,28 @@ ApplicationWindow {
 
                         state: window.aiState
 
+                        // IMPORTANT:
+                        //
+                        // Do NOT use:
+                        //
+                        //     assistantBridge: assistantBridge
+                        //
+                        // because that can resolve to ChatView's
+                        // own property.
+                        //
+                        // Explicitly use the ApplicationWindow
+                        // bridge property.
+
+                        assistantBridge: window.bridge
+
 
                         onClearRequested: {
 
-                            assistantBridge.clearConversation()
+                            if (window.bridge) {
+
+                                window.bridge
+                                    .clearConversation()
+                            }
                         }
                     }
                 }
@@ -281,17 +314,20 @@ ApplicationWindow {
 
                 anchors.centerIn: parent
 
-
-                width: Math.min(
-                    parent.width - 180,
-                    760
-                )
-
+                width:
+                    Math.min(
+                        parent.width - 180,
+                        760
+                    )
 
                 height: 72
 
                 state: window.aiState
 
+
+                // ==================================================
+                // COMMAND SUBMITTED
+                // ==================================================
 
                 onCommandSubmitted: function(command) {
 
@@ -308,7 +344,7 @@ ApplicationWindow {
 
 
                     // ------------------------------------------------
-                    // Display user message immediately.
+                    // Add the user message exactly ONCE.
                     // ------------------------------------------------
 
                     chatView.addUserMessage(
@@ -317,12 +353,35 @@ ApplicationWindow {
 
 
                     // ------------------------------------------------
-                    // Send to Python backend.
+                    // Send to Python exactly ONCE.
+                    //
+                    // ChatView no longer sends messages itself.
                     // ------------------------------------------------
 
-                    assistantBridge.sendMessage(
-                        cleanCommand
-                    )
+                    if (window.bridge) {
+
+                        console.log(
+                            "MAIN: Sending command to AssistantBridge:",
+                            cleanCommand
+                        )
+
+                        window.bridge.sendMessage(
+                            cleanCommand
+                        )
+
+                    } else {
+
+                        console.error(
+                            "MAIN: krakkenBridge is not available."
+                        )
+
+                        chatView.addAssistantMessage(
+                            "Error: AssistantBridge is not available."
+                        )
+
+                        window.aiState =
+                            "error"
+                    }
                 }
             }
         }
@@ -342,12 +401,14 @@ ApplicationWindow {
 
 
     // ==========================================================
-    // ASSISTANT BRIDGE CONNECTIONS
+    // SINGLE ASSISTANT BRIDGE CONNECTION
     // ==========================================================
 
     Connections {
 
-        target: assistantBridge
+        id: bridgeConnections
+
+        target: window.bridge
 
 
         // ======================================================
@@ -356,15 +417,36 @@ ApplicationWindow {
 
         function onStateChanged(state) {
 
+            if (
+                state === undefined ||
+                state === null
+            ) {
+                return
+            }
+
+
+            var nextState =
+                String(state).trim()
+
+
+            if (
+                nextState.length === 0
+            ) {
+                return
+            }
+
+
             console.log(
                 "QML AI STATE:",
-                state
+                nextState
             )
 
 
-            window.aiState = state
+            window.aiState =
+                nextState
 
-            chatView.state = state
+            chatView.state =
+                nextState
         }
 
 
@@ -390,15 +472,26 @@ ApplicationWindow {
         function onResponseChunk(chunk) {
 
             if (
-                !chunk ||
-                chunk.length === 0
+                chunk === undefined ||
+                chunk === null
+            ) {
+                return
+            }
+
+
+            var text =
+                String(chunk)
+
+
+            if (
+                text.length === 0
             ) {
                 return
             }
 
 
             chatView.appendStreamText(
-                chunk
+                text
             )
         }
 
@@ -419,32 +512,6 @@ ApplicationWindow {
 
 
         // ======================================================
-        // HIGHLIGHTS
-        // ======================================================
-
-        function onHighlightsReady(highlights) {
-
-            console.log(
-                "QML HIGHLIGHTS RECEIVED:",
-                highlights
-            )
-
-
-            if (
-                !highlights ||
-                highlights.length === 0
-            ) {
-                return
-            }
-
-
-            chatView.showHighlights(
-                highlights
-            )
-        }
-
-
-        // ======================================================
         // ERROR
         // ======================================================
 
@@ -459,12 +526,79 @@ ApplicationWindow {
             chatView.cancelStreaming()
 
 
+            var message =
+                errorMessage !== undefined &&
+                errorMessage !== null
+                ? String(errorMessage)
+                : "Unknown assistant error."
+
+
             chatView.addAssistantMessage(
-                "Error: " + errorMessage
+                "Error: " + message
             )
 
 
-            window.aiState = "error"
+            window.aiState =
+                "error"
+        }
+
+
+        // ======================================================
+        // HISTORY CLEARED
+        // ======================================================
+
+        function onHistoryCleared() {
+
+            console.log(
+                "QML HISTORY CLEARED"
+            )
+
+
+            chatView.clearMessages()
+        }
+    }
+
+
+    // ==========================================================
+    // STARTUP
+    // ==========================================================
+
+    Component.onCompleted: {
+
+        console.log(
+            "========================================"
+        )
+
+        console.log(
+            "KRAKKEN MAIN WINDOW INITIALIZED"
+        )
+
+        console.log(
+            "Python bridge:",
+            window.bridge
+        )
+
+        console.log(
+            "ChatView bridge:",
+            chatView.assistantBridge
+        )
+
+        console.log(
+            "========================================"
+        )
+
+
+        if (!window.bridge) {
+
+            console.error(
+                "MAIN: krakkenBridge is NULL."
+            )
+
+        } else {
+
+            console.log(
+                "MAIN: krakkenBridge connected successfully."
+            )
         }
     }
 }
