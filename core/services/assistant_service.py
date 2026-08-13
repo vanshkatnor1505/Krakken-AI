@@ -1,58 +1,110 @@
-
 """
 Krakken AI Assistant Service.
 
 Coordinates:
 
-    Conversation
-        ↓
-    AI Provider
-        ↓
-    Streaming Response
-        ├──────────────→ QML / Screen
-        │                  FULL RESPONSE
-        │
-        └──────────────→ Response Analyzer
-                            ↓
-                       Spoken Summary
-                            ↓
-                         Kokoro TTS
-                            ↓
-                        AudioPlayer
-
-Important design principle:
-
-The screen and voice have different jobs.
-
-The screen should receive the COMPLETE AI response.
-
-The voice should communicate the most useful information without
-forcing the user to listen to an entire long paragraph.
-
-Behavior:
-
-    Short response
-        → speak entire response
-
-    Long response
-        → intelligently extract important information
-        → speak that information
-        → optionally mention that the full response is visible
-          on screen
+- conversation history
+- AI providers
+- streaming responses
+- tool calling
+- tool execution
+- response intelligence
+- text-to-speech
+- audio playback
+- EventBus communication
 
 The service deliberately contains no Qt/QML code.
+
+Architecture:
+
+    EventBus
+        ↓
+    AssistantService
+        ↓
+    ConversationManager
+        ↓
+    GroqProvider
+        ↓
+    ┌──────────────────────────────┐
+    │                              │
+    │       Normal response        │
+    │              ↓               │
+    │   ResponseIntelligence       │
+    │        ↓          ↓          │
+    │       QML        TTS         │
+    │                              │
+    │       Tool response          │
+    │              ↓               │
+    │        ToolManager           │
+    │              ↓               │
+    │         ToolResult           │
+    │              ↓               │
+    │       Conversation           │
+    │              ↓               │
+    │        GroqProvider          │
+    │              ↓               │
+    │       Final response         │
+    └──────────────────────────────┘
+
+Voice pipeline:
+
+    AI response
+        ↓
+    ResponseIntelligence
+        ↓
+    Speech selection
+        ↓
+    TTS chunking
+        ↓
+    TTS queue
+        ↓
+    Kokoro TTS
+        ↓
+    AudioPlayer
+        ↓
+    Speakers
+
+The complete AI response is always preserved for the UI.
+
+For long responses, only the intelligently selected important
+information is sent to TTS.
+
+This service does NOT:
+
+- contain Qt/QML code
+- directly manipulate UI
+- contain provider-specific AI logic
+- decide semantic response highlights itself
+- implement individual tools
+
+Tool execution is delegated to ToolManager.
+Semantic response decisions are delegated to ResponseIntelligence.
 """
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from threading import Condition, RLock, Thread
 from typing import Any
 
 from core.ai.conversation_manager import ConversationManager
-from core.ai.models import ChatMessage
-from core.ai.provider import AIProvider, AIProviderError
+from core.ai.models import (
+    AIChunk,
+    AIToolCall,
+    ChatMessage,
+)
+from core.ai.provider import (
+    AIProvider,
+    AIProviderError,
+)
 from core.events.event_bus import Event, EventBus
+from core.services.response_intelligence import (
+    ResponseAnalysis,
+    ResponseIntelligence,
+)
+from core.tools.models import ToolCall
+from core.tools.tool_manager import ToolManager
 from core.voice.audio_player import AudioPlayer
 from core.voice.tts_provider import TTSProvider
 
@@ -67,44 +119,51 @@ class AssistantService:
         - Maintain conversation context
         - Call the configured AI provider
         - Stream response chunks
-        - Send the complete response to QML
-        - Analyze completed responses for speech
-        - Generate speech from selected content
+        - Detect AI tool calls
+        - Execute tools through ToolManager
+        - Feed tool results back to the AI
+        - Store assistant responses
+        - Analyze completed responses
+        - Select speech content
+        - Split speech into TTS-sized chunks
+        - Generate speech
         - Play generated speech
-        - Publish assistant events
+        - Publish assistant.response.started
+        - Publish assistant.response
+        - Publish assistant.response.finished
+        - Publish assistant.tool.started
+        - Publish assistant.tool.finished
+        - Publish assistant.state
+        - Publish assistant.error
         - Handle failures
 
-    Voice behavior is intentionally different from display behavior.
+    Important separation:
 
-    QML receives the complete response.
-
-    TTS receives either:
-        1. the complete response for short answers, or
-        2. intelligently selected highlights for long answers.
+        AI response
+             ↓
+        Tool calls?
+          /       \
+        yes       no
+         ↓         ↓
+    ToolManager   Final text
+         ↓           ↓
+    ToolResult   ResponseIntelligence
+         ↓         /       \
+    AI again     QML       TTS
     """
+
+    # ==========================================================
+    # TOOL CONFIGURATION
+    # ==========================================================
+
+    # Prevent an AI response from entering an infinite
+    # tool-call loop.
+    _MAX_TOOL_ROUNDS = 5
 
     # ==========================================================
     # TTS CONFIGURATION
     # ==========================================================
 
-    # Answers shorter than this are normally spoken completely.
-    _TTS_SHORT_RESPONSE_LENGTH = 420
-
-    # Maximum amount of text we want to send to Kokoro for a
-    # single spoken highlight.
-    _TTS_MAX_FRAGMENT_LENGTH = 240
-
-    # Maximum number of spoken highlights for a long response.
-    _TTS_MAX_HIGHLIGHTS = 4
-
-    # Minimum length before a candidate is considered useful.
-    _TTS_MIN_HIGHLIGHT_LENGTH = 35
-
-    # Maximum total spoken characters for a long response,
-    # excluding the optional screen notice.
-    _TTS_MAX_SPOKEN_LENGTH = 700
-
-    # Sentence terminators.
     _SENTENCE_TERMINATORS = (
         ".",
         "!",
@@ -114,43 +173,17 @@ class AssistantService:
         "？",
     )
 
-    # These phrases usually introduce meta commentary rather
-    # than useful information.
-    _LOW_VALUE_PREFIXES = (
-        "sure",
-        "certainly",
-        "of course",
-        "here's",
-        "here is",
-        "let me explain",
-        "i'd be happy to",
-        "i can help",
-        "as an ai",
-        "as a language model",
-        "in conclusion",
-        "to summarize",
-        "overall",
-    )
+    # Maximum size of one TTS synthesis request.
+    #
+    # ResponseIntelligence decides WHAT should be spoken.
+    # AssistantService decides HOW that speech is fed into TTS.
 
-    # These phrases indicate useful content.
-    _IMPORTANT_PREFIXES = (
-        "the key",
-        "important",
-        "note",
-        "remember",
-        "the main",
-        "the primary",
-        "the result",
-        "the answer",
-        "the reason",
-        "because",
-        "therefore",
-        "this means",
-        "in practice",
-        "you should",
-        "you need to",
-        "the important",
-    )
+    _TTS_MAX_CHUNK_LENGTH = 180
+
+    # Minimum amount of text accepted when looking for a
+    # whitespace-based split.
+
+    _TTS_MIN_SPLIT_LENGTH = 20
 
     # ==========================================================
     # INITIALIZATION
@@ -165,6 +198,7 @@ class AssistantService:
         max_history: int = 40,
         tts_provider: TTSProvider | None = None,
         audio_player: AudioPlayer | None = None,
+        tool_manager: ToolManager | None = None,
     ) -> None:
 
         self._event_bus = event_bus
@@ -179,19 +213,36 @@ class AssistantService:
         self._audio_player = audio_player
 
         # ------------------------------------------------------
+        # Tool system
+        # ------------------------------------------------------
+
+        self._tool_manager = tool_manager
+
+        # ------------------------------------------------------
+        # Response intelligence
+        # ------------------------------------------------------
+
+        self._response_intelligence = ResponseIntelligence(
+            logger=logger,
+        )
+
+        # ------------------------------------------------------
         # Locks
         # ------------------------------------------------------
 
         self._lock = RLock()
 
         # Only one AI generation may run at a time.
+
         self._processing_lock = RLock()
 
         # ------------------------------------------------------
         # TTS pipeline
         # ------------------------------------------------------
 
-        self._tts_condition = Condition(RLock())
+        self._tts_condition = Condition(
+            RLock()
+        )
 
         self._tts_queue: deque[str] = deque()
 
@@ -235,6 +286,10 @@ class AssistantService:
             self._on_clear_history,
         )
 
+        # ======================================================
+        # LOGGING
+        # ======================================================
+
         self._log(
             "AssistantService initialized."
         )
@@ -243,6 +298,39 @@ class AssistantService:
             f"Conversation history limit: "
             f"{max_history} messages."
         )
+
+        # ------------------------------------------------------
+        # Tool logging
+        # ------------------------------------------------------
+
+        if self._tool_manager is not None:
+
+            self._log(
+                "Tool manager attached."
+            )
+
+            self._log(
+                f"Registered tools: "
+                f"{self._tool_manager.count}"
+            )
+
+            for tool_name in (
+                self._tool_manager.get_tool_names()
+            ):
+
+                self._log(
+                    f"Tool available: {tool_name}"
+                )
+
+        else:
+
+            self._log(
+                "Tool manager not configured."
+            )
+
+        # ------------------------------------------------------
+        # TTS logging
+        # ------------------------------------------------------
 
         if self._tts_provider is not None:
 
@@ -267,6 +355,10 @@ class AssistantService:
             self._log(
                 "Audio player not configured."
             )
+
+        self._log(
+            "Response intelligence attached."
+        )
 
     # ==========================================================
     # PUBLIC API
@@ -293,9 +385,18 @@ class AssistantService:
         ]
 
     @property
-    def conversation(self) -> ConversationManager:
+    def conversation(
+        self,
+    ) -> ConversationManager:
 
         return self._conversation
+
+    @property
+    def tool_manager(
+        self,
+    ) -> ToolManager | None:
+
+        return self._tool_manager
 
     def clear_history(self) -> None:
         """
@@ -334,17 +435,16 @@ class AssistantService:
             message,
             str,
         ):
-
             return
 
         message = message.strip()
 
         if not message:
-
             return
 
         self._log(
-            f"AssistantService received message: {message}"
+            "AssistantService received message: "
+            f"{message}"
         )
 
         worker = Thread(
@@ -446,20 +546,12 @@ class AssistantService:
             )
 
             self._log(
-                f"Sending {len(messages)} messages to provider."
+                f"Sending {len(messages)} messages "
+                f"to provider."
             )
 
             # ==================================================
-            # START TTS PIPELINE
-            #
-            # Important:
-            #
-            # We DO NOT immediately send every sentence to TTS.
-            #
-            # We first collect the complete response.
-            #
-            # This allows us to intelligently determine what
-            # should actually be spoken.
+            # PREPARE TTS PIPELINE
             # ==================================================
 
             self._start_tts_pipeline()
@@ -475,114 +567,102 @@ class AssistantService:
                 },
             )
 
+            # ==================================================
+            # GENERATING
+            # ==================================================
+
             self._publish_state(
-                "speaking"
+                "generating"
             )
 
-            complete_response = ""
-
-            chunk_index = 0
-
             # ==================================================
-            # STREAM RESPONSE
+            # TOOL-AWARE GENERATION
             # ==================================================
 
-            for chunk in self._provider.stream(
-                messages
-            ):
-
-                if chunk.content:
-
-                    content = chunk.content
-
-                    # Defensive conversion.
-                    #
-                    # This also prevents accidental tuple/list
-                    # values from entering text processing.
-                    if not isinstance(
-                        content,
-                        str,
-                    ):
-
-                        content = str(
-                            content
-                        )
-
-                    self._log(
-                        f"AI CHUNK RECEIVED "
-                        f"#{chunk_index}: {content!r}"
-                    )
-
-                    complete_response += content
-
-                    # --------------------------------------------------
-                    # QML ALWAYS GETS THE COMPLETE STREAM.
-                    # --------------------------------------------------
-
-                    self._publish_event(
-                        "assistant.response",
-                        {
-                            "response": content,
-                            "final": False,
-                            "sequence": chunk_index,
-                        },
-                    )
-
-                    chunk_index += 1
-
-                if chunk.finished:
-
-                    break
+            complete_response = (
+                self._generate_with_tools(
+                    messages
+                )
+            )
 
             # ==================================================
-            # PROVIDER FINISHED
+            # CLEAN RESPONSE
             # ==================================================
 
             complete_response = (
                 complete_response.strip()
             )
 
-            self._log(
-                "AI provider stream finished. "
-                f"Total chunks: {chunk_index}"
+            if not complete_response:
+
+                raise RuntimeError(
+                    "AI provider returned an empty response."
+                )
+
+            # ==================================================
+            # RESPONSE INTELLIGENCE
+            # ==================================================
+
+            analysis = self._analyze_response(
+                complete_response
             )
+
+            # ==================================================
+            # LOG INTELLIGENCE RESULT
+            # ==================================================
+
+            self._log(
+                "Response intelligence result: "
+                f"type="
+                f"{analysis.response_type.value}, "
+                f"long="
+                f"{analysis.is_long_response}, "
+                f"summary="
+                f"{analysis.should_use_summary}, "
+                f"highlights="
+                f"{len(analysis.highlights)}, "
+                f"speech_words="
+                f"{len(analysis.speech_text.split())}, "
+                f"estimated_speech="
+                f"{analysis.estimated_speech_seconds:.1f}s"
+            )
+
+            # ==================================================
+            # QUEUE INTELLIGENT SPEECH
+            # ==================================================
+
+            if analysis.speech_text:
+
+                self._queue_tts_text(
+                    analysis.speech_text
+                )
+
+            else:
+
+                self._log(
+                    "Response intelligence produced "
+                    "no speech text."
+                )
+
+            # ==================================================
+            # FINISH TTS GENERATION
+            # ==================================================
+
+            self._finish_tts_generation()
 
             # ==================================================
             # STORE ASSISTANT RESPONSE
             # ==================================================
 
-            if complete_response:
+            with self._lock:
 
-                with self._lock:
-
-                    self._conversation.add_assistant_message(
-                        complete_response
-                    )
-
-                self._log(
-                    "Assistant response added to conversation."
+                self._conversation.add_assistant_message(
+                    complete_response
                 )
 
-            # ==================================================
-            # PREPARE SMART TTS
-            # ==================================================
-
-            if complete_response:
-
-                spoken_text = (
-                    self._prepare_spoken_response(
-                        complete_response
-                    )
-                )
-
-                if spoken_text:
-
-                    self._queue_tts_text(
-                        spoken_text
-                    )
-
-            # Tell the TTS worker that no more speech is coming.
-            self._finish_tts_generation()
+            self._log(
+                "Assistant response added to conversation."
+            )
 
             # ==================================================
             # RESPONSE FINISHED
@@ -591,13 +671,38 @@ class AssistantService:
             self._publish_event(
                 "assistant.response.finished",
                 {
+                    # Complete response for UI.
                     "response": complete_response,
-                    "total_chunks": chunk_index,
+
+                    # Response intelligence metadata.
+                    "response_type": (
+                        analysis.response_type.value
+                    ),
+
+                    "highlights": (
+                        analysis.highlights
+                    ),
+
+                    "is_long_response": (
+                        analysis.is_long_response
+                    ),
+
+                    "should_use_summary": (
+                        analysis.should_use_summary
+                    ),
+
+                    "estimated_speech_seconds": (
+                        analysis.estimated_speech_seconds
+                    ),
+
+                    "speech_text": (
+                        analysis.speech_text
+                    ),
                 },
             )
 
             # ==================================================
-            # WAIT FOR AUDIO
+            # WAIT FOR AUDIO PIPELINE
             # ==================================================
 
             self._wait_for_tts_completion()
@@ -631,890 +736,492 @@ class AssistantService:
             )
 
     # ==========================================================
-    # SMART TTS RESPONSE ANALYSIS
+    # TOOL-AWARE GENERATION
     # ==========================================================
 
-    def _prepare_spoken_response(
+    def _generate_with_tools(
         self,
-        response: str,
+        messages: list[ChatMessage],
     ) -> str:
         """
-        Decide what the assistant should actually say aloud.
+        Generate a response while supporting AI tool calls.
 
-        The complete response remains visible on screen.
+        Flow:
 
-        Short response:
-            speak everything.
+            Groq
+              ↓
+            tool call?
+             /    \
+           no      yes
+           ↓        ↓
+        text    ToolManager
+                    ↓
+                ToolResult
+                    ↓
+                role=tool
+                    ↓
+                  Groq
 
-        Long response:
-            intelligently select important sentences,
-            facts, conclusions, steps, or technical values.
-
-        This method intentionally operates ONLY on strings.
+        The loop is bounded by _MAX_TOOL_ROUNDS so a malformed
+        or confused model cannot execute tools indefinitely.
         """
 
-        if not isinstance(
-            response,
-            str,
+        current_messages = list(
+            messages
+        )
+
+        complete_response = ""
+
+        tool_definitions = (
+            self._get_tool_definitions()
+        )
+
+        for tool_round in range(
+            self._MAX_TOOL_ROUNDS
         ):
 
-            response = str(
+            self._log(
+                f"AI generation round "
+                f"{tool_round + 1}/"
+                f"{self._MAX_TOOL_ROUNDS}"
+            )
+
+            round_response = ""
+
+            tool_calls: list[AIToolCall] = []
+
+            chunk_index = 0
+
+            self._publish_state(
+                "generating"
+            )
+
+            # --------------------------------------------------
+            # Stream one provider round.
+            # --------------------------------------------------
+
+            for chunk in self._provider.stream(
+                current_messages,
+                tools=tool_definitions,
+            ):
+
+                if chunk.content:
+
+                    content = chunk.content
+
+                    round_response += content
+
+                    self._log(
+                        f"AI CHUNK RECEIVED "
+                        f"#{chunk_index}: "
+                        f"{content!r}"
+                    )
+
+                    # Only publish actual natural-language
+                    # response content to QML.
+                    #
+                    # Tool-call deltas must remain internal.
+
+                    self._publish_event(
+                        "assistant.response",
+                        {
+                            "response": content,
+                            "final": False,
+                            "sequence": chunk_index,
+                        },
+                    )
+
+                    chunk_index += 1
+
+                if chunk.tool_calls:
+
+                    tool_calls.extend(
+                        chunk.tool_calls
+                    )
+
+                if chunk.finished:
+
+                    break
+
+            # --------------------------------------------------
+            # Normal response.
+            # --------------------------------------------------
+
+            if not tool_calls:
+
+                complete_response += (
+                    round_response
+                )
+
+                self._log(
+                    "AI generation completed "
+                    "without tool calls."
+                )
+
+                return complete_response
+
+            # --------------------------------------------------
+            # Tool calls detected.
+            # --------------------------------------------------
+
+            self._log(
+                f"AI requested "
+                f"{len(tool_calls)} tool(s)."
+            )
+
+            # --------------------------------------------------
+            # Add the assistant tool-call message to the
+            # conversation.
+            # --------------------------------------------------
+
+            assistant_tool_message = (
+                self._build_assistant_tool_message(
+                    content=round_response,
+                    tool_calls=tool_calls,
+                )
+            )
+
+            current_messages.append(
+                assistant_tool_message
+            )
+
+            # --------------------------------------------------
+            # Execute every requested tool.
+            # --------------------------------------------------
+
+            for ai_tool_call in tool_calls:
+
+                tool_result = (
+                    self._execute_tool_call(
+                        ai_tool_call
+                    )
+                )
+
+                # ----------------------------------------------
+                # Send tool result back to the model.
+                # ----------------------------------------------
+
+                tool_message = (
+                    self._build_tool_result_message(
+                        ai_tool_call,
+                        tool_result,
+                    )
+                )
+
+                current_messages.append(
+                    tool_message
+                )
+
+            # --------------------------------------------------
+            # The AI may now inspect the tool results and
+            # produce the actual answer.
+            # --------------------------------------------------
+
+            self._publish_state(
+                "thinking"
+            )
+
+        raise RuntimeError(
+            "Maximum tool-call rounds exceeded."
+        )
+
+    # ==========================================================
+    # TOOL DEFINITIONS
+    # ==========================================================
+
+    def _get_tool_definitions(
+        self,
+    ) -> list[Any]:
+        """
+        Return registered tool definitions for the provider.
+
+        If no ToolManager is configured, an empty list is
+        returned and the provider behaves like a normal chatbot.
+        """
+
+        if self._tool_manager is None:
+
+            return []
+
+        try:
+
+            definitions = (
+                self._tool_manager.get_definitions()
+            )
+
+            self._log(
+                f"Providing "
+                f"{len(definitions)} tool definitions "
+                f"to AI provider."
+            )
+
+            return definitions
+
+        except Exception as exc:
+
+            self._log(
+                "Failed to retrieve tool definitions: "
+                f"{exc}",
+                error=True,
+            )
+
+            return []
+
+    # ==========================================================
+    # ASSISTANT TOOL MESSAGE
+    # ==========================================================
+
+    @staticmethod
+    def _build_assistant_tool_message(
+        content: str,
+        tool_calls: list[AIToolCall],
+    ) -> ChatMessage:
+        """
+        Convert AI tool calls into a provider-ready assistant
+        ChatMessage.
+
+        ChatMessage.to_dict() is responsible for converting
+        AIToolCall objects into the provider's expected format.
+        """
+
+        return ChatMessage(
+            role="assistant",
+            content=content,
+            tool_calls=tool_calls,
+        )
+
+    # ==========================================================
+    # TOOL EXECUTION
+    # ==========================================================
+
+    def _execute_tool_call(
+        self,
+        ai_tool_call: AIToolCall,
+    ):
+        """
+        Execute one AI-requested tool through ToolManager.
+
+        AIProvider knows how to communicate with the model.
+
+        ToolManager knows how to execute tools.
+
+        AssistantService only coordinates the two.
+        """
+
+        if self._tool_manager is None:
+
+            raise RuntimeError(
+                "AI requested a tool, but ToolManager "
+                "is not configured."
+            )
+
+        self._publish_event(
+            "assistant.tool.started",
+            {
+                "tool": ai_tool_call.name,
+                "call_id": ai_tool_call.call_id,
+                "arguments": ai_tool_call.arguments,
+            },
+        )
+
+        self._publish_state(
+            "tool"
+        )
+
+        self._log(
+            "Executing tool: "
+            f"{ai_tool_call.name} "
+            f"call_id={ai_tool_call.call_id} "
+            f"arguments={ai_tool_call.arguments}"
+        )
+
+        try:
+
+            tool_call = ToolCall(
+                name=ai_tool_call.name,
+                arguments=ai_tool_call.arguments,
+                call_id=ai_tool_call.call_id,
+            )
+
+            result = (
+                self._tool_manager.execute(
+                    tool_call
+                )
+            )
+
+            self._publish_event(
+                "assistant.tool.finished",
+                {
+                    "tool": ai_tool_call.name,
+                    "call_id": ai_tool_call.call_id,
+                    "success": result.success,
+                    "data": result.data,
+                    "error": result.error,
+                },
+            )
+
+            self._log(
+                "Tool execution completed: "
+                f"{ai_tool_call.name} "
+                f"success={result.success}"
+            )
+
+            return result
+
+        except Exception as exc:
+
+            self._log(
+                f"Tool execution failed: "
+                f"{ai_tool_call.name}: {exc}",
+                error=True,
+            )
+
+            self._publish_event(
+                "assistant.tool.finished",
+                {
+                    "tool": ai_tool_call.name,
+                    "call_id": ai_tool_call.call_id,
+                    "success": False,
+                    "data": None,
+                    "error": str(exc),
+                },
+            )
+
+            raise
+
+    # ==========================================================
+    # TOOL RESULT MESSAGE
+    # ==========================================================
+
+    @staticmethod
+    def _build_tool_result_message(
+        ai_tool_call: AIToolCall,
+        result: Any,
+    ) -> ChatMessage:
+        """
+        Convert ToolResult into a role='tool' ChatMessage.
+
+        The model receives a JSON representation of the result.
+        """
+
+        payload = {
+            "success": bool(
+                result.success
+            ),
+            "data": result.data,
+            "error": result.error,
+        }
+
+        content = json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=str,
+        )
+
+        return ChatMessage(
+            role="tool",
+            content=content,
+            tool_call_id=ai_tool_call.call_id,
+            name=ai_tool_call.name,
+        )
+
+    # ==========================================================
+    # RESPONSE INTELLIGENCE
+    # ==========================================================
+
+    def _analyze_response(
+        self,
+        response: str,
+    ) -> ResponseAnalysis:
+        """
+        Analyze a complete AI response.
+
+        ResponseIntelligence owns the semantic decision about
+        what should be spoken.
+
+        The original response remains untouched.
+        """
+
+        try:
+
+            return self._response_intelligence.analyze(
                 response
             )
 
-        response = response.strip()
-
-        if not response:
-
-            return ""
-
-        # ------------------------------------------------------
-        # Remove excessive whitespace.
-        # ------------------------------------------------------
-
-        normalized = self._normalize_text(
-            response
-        )
-
-        if not normalized:
-
-            return ""
-
-        # ------------------------------------------------------
-        # Short answers should sound natural.
-        # ------------------------------------------------------
-
-        if len(normalized) <= self._TTS_SHORT_RESPONSE_LENGTH:
+        except Exception as exc:
 
             self._log(
-                "TTS mode: full response."
+                "Response intelligence failed: "
+                f"{exc}. "
+                "Falling back to full response speech.",
+                error=True,
             )
 
-            return normalized
-
-        # ------------------------------------------------------
-        # Long answer.
-        # ------------------------------------------------------
-
-        self._log(
-            "TTS mode: smart highlights."
-        )
-
-        highlights = (
-            self._extract_smart_highlights(
-                normalized
-            )
-        )
-
-        if not highlights:
-
-            # Safe fallback.
-            fallback = (
-                self._first_useful_sentences(
-                    normalized
-                )
-            )
-
-            highlights = fallback
-
-        if not highlights:
-
-            return self._truncate_for_tts(
-                normalized
-            )
-
-        spoken = " ".join(
-            highlights
-        ).strip()
-
-        # ------------------------------------------------------
-        # Add a screen notice ONLY when the response really
-        # contains substantially more information than what
-        # we are speaking.
-        # ------------------------------------------------------
-
-        if len(spoken) < len(normalized) * 0.70:
-
-            spoken = (
-                spoken
-                + " "
-                + "The full explanation is available on screen."
-            )
-
-        spoken = self._truncate_for_tts(
-            spoken
-        )
-
-        self._log(
-            "Smart TTS selected "
-            f"{len(highlights)} highlights. "
-            f"Spoken characters: {len(spoken)} / "
-            f"Screen characters: {len(normalized)}"
-        )
-
-        return spoken
-
-    # ==========================================================
-    # SMART HIGHLIGHT EXTRACTION
-    # ==========================================================
-
-    def _extract_smart_highlights(
-        self,
-        text: str,
-    ) -> list[str]:
-        """
-        Extract useful sentences from a long response.
-
-        This is intentionally heuristic rather than an additional
-        AI request. It keeps TTS fast and local.
-
-        Selection favors:
-
-            - first meaningful explanation
-            - explicitly important statements
-            - conclusions
-            - definitions
-            - practical recommendations
-            - numbered steps
-            - equations / technical facts
-            - sentences containing useful numbers
-            - later conclusion/summary sentences
-
-        It avoids:
-
-            - greetings
-            - filler
-            - repetitive meta commentary
-            - giant code blocks
-            - markdown formatting
-        """
-
-        sentences = self._split_into_sentences(
-            text
-        )
-
-        if not sentences:
-
-            return []
-
-        candidates: list[tuple[int, int, str]] = []
-
-        for index, sentence in enumerate(
-            sentences
-        ):
-
-            clean = self._clean_for_speech(
-                sentence
-            )
-
-            if not clean:
-
-                continue
-
-            if len(clean) < self._TTS_MIN_HIGHLIGHT_LENGTH:
-
-                continue
-
-            score = self._score_sentence(
-                clean,
-                index,
-                len(sentences),
-            )
-
-            candidates.append(
-                (
-                    score,
-                    index,
-                    clean,
-                )
-            )
-
-        if not candidates:
-
-            return []
-
-        # Highest-scoring candidates first.
-        candidates.sort(
-            key=lambda item: item[0],
-            reverse=True,
-        )
-
-        selected: list[tuple[int, str]] = []
-
-        for score, index, sentence in candidates:
-
-            # Avoid selecting too many sentences.
-            if len(selected) >= self._TTS_MAX_HIGHLIGHTS:
-
-                break
-
-            # Avoid near duplicates.
-            if self._is_duplicate_highlight(
-                sentence,
-                [
-                    item[1]
-                    for item in selected
-                ],
-            ):
-
-                continue
-
-            # Estimate total spoken length.
-            current_length = sum(
-                len(item[1])
-                for item in selected
-            )
-
-            if (
-                current_length + len(sentence)
-                > self._TTS_MAX_SPOKEN_LENGTH
-            ):
-
-                continue
-
-            selected.append(
-                (
-                    index,
-                    sentence,
-                )
-            )
-
-        # Preserve the original response order.
-        selected.sort(
-            key=lambda item: item[0]
-        )
-
-        return [
-            sentence
-            for _, sentence in selected
-        ]
-
-    # ==========================================================
-    # SENTENCE SCORING
-    # ==========================================================
-
-    def _score_sentence(
-        self,
-        sentence: str,
-        index: int,
-        total_sentences: int,
-    ) -> int:
-        """
-        Score a sentence for spoken importance.
-
-        IMPORTANT:
-
-        Everything passed into this function is explicitly
-        converted/validated as str.
-
-        This prevents the previous:
-
-            'tuple' object has no attribute 'lower'
-
-        error.
-        """
-
-        if not isinstance(
-            sentence,
-            str,
-        ):
-
-            sentence = str(
-                sentence
-            )
-
-        text = sentence.strip()
-
-        if not text:
-
-            return -100
-
-        lower = text.lower()
-
-        score = 0
-
-        # ------------------------------------------------------
-        # Basic useful length.
-        # ------------------------------------------------------
-
-        if 50 <= len(text) <= 220:
-
-            score += 3
-
-        elif len(text) > 300:
-
-            score -= 2
-
-        # ------------------------------------------------------
-        # First meaningful sentence often contains the answer.
-        # ------------------------------------------------------
-
-        if index == 0:
-
-            score += 5
-
-        elif index == 1:
-
-            score += 2
-
-        # ------------------------------------------------------
-        # Important phrases.
-        # ------------------------------------------------------
-
-        for prefix in self._IMPORTANT_PREFIXES:
-
-            if lower.startswith(prefix):
-
-                score += 6
-
-        # ------------------------------------------------------
-        # Definition language.
-        # ------------------------------------------------------
-
-        definition_markers = (
-            " is ",
-            " are ",
-            " means ",
-            " refers to ",
-            "defined as",
-            "is called",
-            "is the process",
-        )
-
-        for marker in definition_markers:
-
-            if marker in lower:
-
-                score += 4
-
-        # ------------------------------------------------------
-        # Practical/useful language.
-        # ------------------------------------------------------
-
-        useful_markers = (
-            "you should",
-            "you can",
-            "you need",
-            "the best",
-            "recommended",
-            "important",
-            "key point",
-            "main point",
-            "result",
-            "because",
-            "therefore",
-            "allows",
-            "helps",
-            "prevents",
-            "improves",
-        )
-
-        for marker in useful_markers:
-
-            if marker in lower:
-
-                score += 3
-
-        # ------------------------------------------------------
-        # Technical information.
-        # ------------------------------------------------------
-
-        technical_markers = (
-            "python",
-            "java",
-            "javascript",
-            "typescript",
-            "rust",
-            "cuda",
-            "gpu",
-            "cpu",
-            "api",
-            "model",
-            "algorithm",
-            "equation",
-            "formula",
-            "database",
-            "architecture",
-            "system",
-            "error",
-            "performance",
-        )
-
-        for marker in technical_markers:
-
-            if marker in lower:
-
-                score += 2
-
-        # ------------------------------------------------------
-        # Numeric information is often useful when spoken.
-        # ------------------------------------------------------
-
-        if any(
-            character.isdigit()
-            for character in text
-        ):
-
-            score += 2
-
-        # ------------------------------------------------------
-        # Equations / symbols.
-        # ------------------------------------------------------
-
-        if any(
-            symbol in text
-            for symbol in (
-                "=",
-                "→",
-                "->",
-                "+",
-                "×",
-                "÷",
-            )
-        ):
-
-            score += 2
-
-        # ------------------------------------------------------
-        # Conclusion sentences.
-        # ------------------------------------------------------
-
-        conclusion_markers = (
-            "therefore",
-            "in short",
-            "in summary",
-            "ultimately",
-            "this means",
-            "so the",
-            "as a result",
-            "the key takeaway",
-        )
-
-        for marker in conclusion_markers:
-
-            if marker in lower:
-
-                score += 5
-
-        # ------------------------------------------------------
-        # Penalize filler.
-        # ------------------------------------------------------
-
-        for prefix in self._LOW_VALUE_PREFIXES:
-
-            if lower.startswith(prefix):
-
-                score -= 6
-
-        # ------------------------------------------------------
-        # Penalize questions.
-        # ------------------------------------------------------
-
-        if text.endswith("?"):
-
-            score -= 4
-
-        # ------------------------------------------------------
-        # Penalize obvious meta language.
-        # ------------------------------------------------------
-
-        meta_markers = (
-            "would you like",
-            "let me know",
-            "feel free",
-            "hope this helps",
-            "if you have any questions",
-        )
-
-        for marker in meta_markers:
-
-            if marker in lower:
-
-                score -= 8
-
-        # ------------------------------------------------------
-        # Later sentences can contain conclusions.
-        # ------------------------------------------------------
-
-        if total_sentences > 4:
-
-            if index >= total_sentences - 2:
-
-                score += 2
-
-        return score
-
-    # ==========================================================
-    # SENTENCE SPLITTING
-    # ==========================================================
-
-    def _split_into_sentences(
-        self,
-        text: str,
-    ) -> list[str]:
-        """
-        Split response into usable sentences.
-
-        Handles common markdown/newline structures without
-        requiring another dependency.
-        """
-
-        if not isinstance(
-            text,
-            str,
-        ):
-
-            text = str(
-                text
-            )
-
-        text = text.strip()
-
-        if not text:
-
-            return []
-
-        sentences: list[str] = []
-
-        current: list[str] = []
-
-        for character in text:
-
-            current.append(
-                character
-            )
-
-            if character in self._SENTENCE_TERMINATORS:
-
-                sentence = "".join(
-                    current
-                ).strip()
-
-                if sentence:
-
-                    sentences.append(
-                        sentence
+            return ResponseAnalysis(
+                full_response=response,
+                response_type=(
+                    self._fallback_response_type()
+                ),
+                highlights=[],
+                speech_text=response,
+                display_text=response,
+                should_use_summary=False,
+                is_long_response=False,
+                estimated_speech_seconds=(
+                    self._estimate_speech_duration(
+                        response
                     )
-
-                current.clear()
-
-        # Remaining text.
-        remainder = "".join(
-            current
-        ).strip()
-
-        if remainder:
-
-            sentences.append(
-                remainder
+                ),
+                metadata={
+                    "fallback": True,
+                    "reason": str(exc),
+                },
             )
 
-        # If punctuation splitting produced nothing useful,
-        # use lines as a fallback.
-        if not sentences:
-
-            sentences = [
-                line.strip()
-                for line in text.splitlines()
-                if line.strip()
-            ]
-
-        return sentences
-
     # ==========================================================
-    # FIRST USEFUL SENTENCES
+    # RESPONSE INTELLIGENCE FALLBACK
     # ==========================================================
 
-    def _first_useful_sentences(
-        self,
-        text: str,
-    ) -> list[str]:
+    @staticmethod
+    def _fallback_response_type():
         """
-        Safe fallback when smart scoring cannot find enough
-        useful candidates.
+        Return the safest response type when semantic analysis
+        fails.
         """
 
-        sentences = self._split_into_sentences(
-            text
+        from core.services.response_intelligence import (
+            ResponseType,
         )
 
-        result: list[str] = []
+        return ResponseType.SHORT
 
-        for sentence in sentences:
-
-            clean = self._clean_for_speech(
-                sentence
-            )
-
-            if not clean:
-
-                continue
-
-            if len(clean) < 25:
-
-                continue
-
-            result.append(
-                clean
-            )
-
-            if len(result) >= 3:
-
-                break
-
-        return result
-
-    # ==========================================================
-    # SPEECH CLEANING
-    # ==========================================================
-
-    def _clean_for_speech(
-        self,
+    @staticmethod
+    def _estimate_speech_duration(
         text: str,
-    ) -> str:
+    ) -> float:
         """
-        Convert a response sentence into speech-friendly text.
+        Basic fallback speech-duration estimate.
         """
-
-        if not isinstance(
-            text,
-            str,
-        ):
-
-            text = str(
-                text
-            )
-
-        text = text.strip()
 
         if not text:
 
-            return ""
+            return 0.0
 
-        # Remove markdown headings.
-        while text.startswith("#"):
-
-            text = text[1:].strip()
-
-        # Remove bullet markers.
-        bullet_prefixes = (
-            "- ",
-            "* ",
-            "• ",
-        )
-
-        for prefix in bullet_prefixes:
-
-            if text.startswith(prefix):
-
-                text = text[
-                    len(prefix):
-                ].strip()
-
-                break
-
-        # Remove numbered-list prefix.
-        #
-        # Example:
-        #     "1. Install Python"
-        #
-        # becomes:
-        #     "Install Python"
-        if (
-            len(text) >= 3
-            and text[0].isdigit()
-            and text[1] == "."
-        ):
-
-            text = text[2:].strip()
-
-        # Remove excessive whitespace.
-        text = " ".join(
+        words = len(
             text.split()
         )
 
-        return text.strip()
-
-    # ==========================================================
-    # NORMALIZATION
-    # ==========================================================
-
-    def _normalize_text(
-        self,
-        text: str,
-    ) -> str:
-        """
-        Normalize text while preserving meaningful content.
-        """
-
-        if not isinstance(
-            text,
-            str,
-        ):
-
-            text = str(
-                text
-            )
-
-        lines = []
-
-        for line in text.splitlines():
-
-            line = line.strip()
-
-            if not line:
-
-                continue
-
-            # Ignore fenced code markers for speech analysis.
-            if line.startswith("```"):
-
-                continue
-
-            lines.append(
-                line
-            )
-
-        return " ".join(
-            lines
-        ).strip()
-
-    # ==========================================================
-    # DUPLICATE DETECTION
-    # ==========================================================
-
-    def _is_duplicate_highlight(
-        self,
-        candidate: str,
-        selected: list[str],
-    ) -> bool:
-        """
-        Prevent two highlights saying essentially the same thing.
-        """
-
-        if not isinstance(
-            candidate,
-            str,
-        ):
-
-            candidate = str(
-                candidate
-            )
-
-        candidate_words = set(
-            candidate.lower().split()
-        )
-
-        if not candidate_words:
-
-            return True
-
-        for existing in selected:
-
-            if not isinstance(
-                existing,
-                str,
-            ):
-
-                existing = str(
-                    existing
-                )
-
-            existing_words = set(
-                existing.lower().split()
-            )
-
-            if not existing_words:
-
-                continue
-
-            overlap = (
-                len(
-                    candidate_words
-                    & existing_words
-                )
-                / max(
-                    len(candidate_words),
-                    len(existing_words),
-                )
-            )
-
-            if overlap >= 0.70:
-
-                return True
-
-        return False
-
-    # ==========================================================
-    # TTS TRUNCATION
-    # ==========================================================
-
-    def _truncate_for_tts(
-        self,
-        text: str,
-    ) -> str:
-        """
-        Ensure spoken content does not become excessively long.
-
-        Truncation happens at a sentence/word boundary whenever
-        possible.
-        """
-
-        if not isinstance(
-            text,
-            str,
-        ):
-
-            text = str(
-                text
-            )
-
-        text = text.strip()
-
-        if len(text) <= self._TTS_MAX_SPOKEN_LENGTH:
-
-            return text
-
-        limit = self._TTS_MAX_SPOKEN_LENGTH
-
-        candidate = text[
-            :limit
-        ]
-
-        # Prefer sentence boundary.
-        last_period = max(
-            candidate.rfind("."),
-            candidate.rfind("!"),
-            candidate.rfind("?"),
-        )
-
-        if last_period >= 150:
-
-            return candidate[
-                :last_period + 1
-            ].strip()
-
-        # Otherwise use word boundary.
-        whitespace = candidate.rfind(
-            " "
-        )
-
-        if whitespace > 100:
-
-            return (
-                candidate[
-                    :whitespace
-                ].strip()
-                + "."
-            )
-
-        return candidate.strip() + "."
+        return (
+            words / 145.0
+        ) * 60.0
 
     # ==========================================================
     # TTS PIPELINE
     # ==========================================================
 
-    def _start_tts_pipeline(self) -> None:
+    def _start_tts_pipeline(
+        self,
+    ) -> None:
         """
         Prepare the TTS worker for a new assistant response.
         """
@@ -1552,25 +1259,158 @@ class AssistantService:
         )
 
     # ==========================================================
-    # QUEUE TTS
+    # TTS TEXT CHUNKING
     # ==========================================================
+
+    def _split_tts_text(
+        self,
+        text: str,
+    ) -> list[str]:
+        """
+        Split selected speech text into TTS-friendly chunks.
+
+        Priority:
+
+            1. sentence boundaries
+            2. whitespace boundaries
+            3. hard character split
+        """
+
+        text = text.strip()
+
+        if not text:
+
+            return []
+
+        chunks: list[str] = []
+
+        remaining = text
+
+        while len(
+            remaining
+        ) > self._TTS_MAX_CHUNK_LENGTH:
+
+            split_index = -1
+
+            search_end = (
+                self._TTS_MAX_CHUNK_LENGTH
+            )
+
+            # --------------------------------------------------
+            # Sentence boundary.
+            # --------------------------------------------------
+
+            for index in range(
+                search_end - 1,
+                -1,
+                -1,
+            ):
+
+                if (
+                    remaining[index]
+                    in self._SENTENCE_TERMINATORS
+                ):
+
+                    split_index = (
+                        index + 1
+                    )
+
+                    break
+
+            # --------------------------------------------------
+            # Whitespace boundary.
+            # --------------------------------------------------
+
+            if (
+                split_index
+                < self._TTS_MIN_SPLIT_LENGTH
+            ):
+
+                whitespace_index = (
+                    remaining.rfind(
+                        " ",
+                        self._TTS_MIN_SPLIT_LENGTH,
+                        self._TTS_MAX_CHUNK_LENGTH,
+                    )
+                )
+
+                if whitespace_index > 0:
+
+                    split_index = (
+                        whitespace_index
+                    )
+
+            # --------------------------------------------------
+            # Hard fallback.
+            # --------------------------------------------------
+
+            if split_index <= 0:
+
+                split_index = (
+                    self._TTS_MAX_CHUNK_LENGTH
+                )
+
+            chunk = remaining[
+                :split_index
+            ].strip()
+
+            if chunk:
+
+                chunks.append(
+                    chunk
+                )
+
+            remaining = remaining[
+                split_index:
+            ].lstrip()
+
+        if remaining:
+
+            chunks.append(
+                remaining
+            )
+
+        return chunks
+
+    def _extract_tts_sentences(
+        self,
+        buffer: str,
+    ) -> str:
+        """
+        Legacy sentence extraction helper.
+
+        New code should use _queue_tts_text().
+        """
+
+        buffer = buffer.strip()
+
+        if not buffer:
+
+            return ""
+
+        chunks = self._split_tts_text(
+            buffer
+        )
+
+        if not chunks:
+
+            return ""
+
+        for chunk in chunks:
+
+            self._queue_tts_text(
+                chunk
+            )
+
+        return ""
 
     def _queue_tts_text(
         self,
         text: str,
     ) -> None:
         """
-        Add one speech fragment to the TTS queue.
+        Add selected speech text to the TTS queue.
         """
-
-        if not isinstance(
-            text,
-            str,
-        ):
-
-            text = str(
-                text
-            )
 
         text = text.strip()
 
@@ -1585,23 +1425,31 @@ class AssistantService:
 
             return
 
-        with self._tts_condition:
-
-            self._tts_queue.append(
-                text
-            )
-
-            self._tts_condition.notify()
-
-        self._log(
-            f"TTS queued: {text!r}"
+        chunks = self._split_tts_text(
+            text
         )
 
-    # ==========================================================
-    # FINISH TTS GENERATION
-    # ==========================================================
+        if not chunks:
 
-    def _finish_tts_generation(self) -> None:
+            return
+
+        with self._tts_condition:
+
+            for chunk in chunks:
+
+                self._tts_queue.append(
+                    chunk
+                )
+
+                self._log(
+                    f"TTS queued: {chunk!r}"
+                )
+
+            self._tts_condition.notify_all()
+
+    def _finish_tts_generation(
+        self,
+    ) -> None:
         """
         Mark AI generation as finished.
 
@@ -1616,11 +1464,9 @@ class AssistantService:
 
             self._tts_condition.notify_all()
 
-    # ==========================================================
-    # WAIT FOR TTS
-    # ==========================================================
-
-    def _wait_for_tts_completion(self) -> None:
+    def _wait_for_tts_completion(
+        self,
+    ) -> None:
         """
         Wait until every queued speech fragment has been
         synthesized and played.
@@ -1636,22 +1482,17 @@ class AssistantService:
         with self._tts_condition:
 
             while (
-                self._tts_generation_finished
-                and (
-                    self._tts_queue
-                    or self._tts_generation_active
-                )
+                self._tts_queue
+                or self._tts_generation_active
             ):
 
                 self._tts_condition.wait(
                     timeout=0.25
                 )
 
-    # ==========================================================
-    # CLEAR TTS
-    # ==========================================================
-
-    def _clear_tts_queue(self) -> None:
+    def _clear_tts_queue(
+        self,
+    ) -> None:
         """
         Remove speech that has not started yet.
         """
@@ -1666,11 +1507,9 @@ class AssistantService:
 
             self._tts_condition.notify_all()
 
-    # ==========================================================
-    # CANCEL TTS
-    # ==========================================================
-
-    def _cancel_tts_pipeline(self) -> None:
+    def _cancel_tts_pipeline(
+        self,
+    ) -> None:
         """
         Cancel queued TTS work after an AI failure.
         """
@@ -1685,22 +1524,20 @@ class AssistantService:
 
             self._tts_condition.notify_all()
 
-    # ==========================================================
-    # TTS WORKER
-    # ==========================================================
-
-    def _tts_worker(self) -> None:
+    def _tts_worker(
+        self,
+    ) -> None:
         """
         Background TTS worker.
 
-        For each selected speech fragment:
+        For each speech fragment:
 
-            text
-              ↓
+            speech text
+                ↓
             Kokoro
-              ↓
+                ↓
             AudioPlayer
-              ↓
+                ↓
             next fragment
         """
 
@@ -1740,9 +1577,15 @@ class AssistantService:
                 )
 
                 self._log(
-                    f"Synthesizing speech fragment: "
+                    "Synthesizing speech fragment: "
                     f"{text!r}"
                 )
+
+                if self._tts_provider is None:
+
+                    raise RuntimeError(
+                        "TTS provider is unavailable."
+                    )
 
                 audio = (
                     self._tts_provider.synthesize(
@@ -1753,12 +1596,19 @@ class AssistantService:
                 if audio is None:
 
                     raise RuntimeError(
-                        "TTS provider returned no AudioData."
+                        "TTS provider returned "
+                        "no AudioData."
                     )
 
                 self._log(
                     "Speech fragment synthesized."
                 )
+
+                if self._audio_player is None:
+
+                    raise RuntimeError(
+                        "Audio player is unavailable."
+                    )
 
                 self._audio_player.play(
                     audio,
@@ -1793,11 +1643,13 @@ class AssistantService:
     # CONVERSATION MANAGEMENT
     # ==========================================================
 
-    def get_messages(self) -> list[ChatMessage]:
+    def get_messages(
+        self,
+    ) -> list[ChatMessage]:
         """
-        Return provider-ready conversation messages.
+        Return the provider-ready conversation.
 
-        Includes the system prompt.
+        Includes the system prompt and any tool messages.
         """
 
         with self._lock:
@@ -1806,7 +1658,9 @@ class AssistantService:
                 self._conversation.messages()
             )
 
-    def get_conversation_count(self) -> int:
+    def get_conversation_count(
+        self,
+    ) -> int:
 
         with self._lock:
 
@@ -1883,111 +1737,180 @@ class AssistantService:
     @staticmethod
     def _default_system_prompt() -> str:
         """
-        Default personality/instruction set for Krakken AI.
-
-        The goal is to make Krakken behave like a practical
-        desktop assistant rather than a generic chatbot.
+        Default personality and operating instructions for
+        Krakken AI.
         """
 
         return """
 You are Krakken AI, a personal desktop AI assistant.
 
-You run locally as part of the Krakken AI desktop application.
+Your job is to help the user accomplish things, understand
+information, solve problems, operate their computer workflow,
+and make decisions efficiently.
 
-Your job is to help the user accomplish things efficiently,
-not simply produce generic chatbot responses.
+You are running inside the Krakken AI desktop application.
 
 ============================================================
-IDENTITY
+CORE IDENTITY
 ============================================================
 
-You are Krakken AI.
+You are:
 
-You are the intelligence layer of a desktop assistant.
-
-You should feel like an assistant the user can interact with
-through conversation while working on their computer.
-
-Be:
-
-- direct
+- a desktop assistant
+- conversational
 - practical
-- intelligent
-- context-aware
 - concise when possible
 - detailed when necessary
-- honest about limitations
+- context-aware
+- technically capable
+- proactive when useful
 
-Do not constantly introduce yourself.
+You are NOT:
 
-Do not say "As an AI language model".
+- a generic web chatbot
+- a fictional character
+- a passive question-answer machine
+- unnecessarily verbose
 
-Do not use unnecessary conversational filler.
-
-Do not repeatedly say:
-
-- "Sure!"
-- "Absolutely!"
-- "Of course!"
-- "I'd be happy to help!"
-- "Let me know if you need anything else!"
-
-unless the situation genuinely calls for it.
+Your responses should feel like they come from an assistant
+that is actively helping the user.
 
 ============================================================
-RESPONSE LENGTH
+RESPONSE PRINCIPLES
 ============================================================
 
-Match the response length to the user's request.
+1. ANSWER THE ACTUAL QUESTION
 
-Simple question:
-→ concise answer.
+Understand what the user is asking before responding.
 
-Definition:
-→ definition + useful explanation.
+Do not answer a different question merely because it is related.
 
-Technical problem:
-→ diagnosis + cause + solution.
+If the request is simple, give a simple answer.
 
-Debugging:
-→ identify the actual problem first,
-  then give the exact fix.
+If the request requires reasoning, provide the reasoning needed
+to make the answer useful.
 
-Complex question:
-→ structure the answer clearly.
+------------------------------------------------------------
 
-Do not produce huge explanations when a short answer is enough.
+2. PRIORITIZE USEFUL INFORMATION
 
-Do not omit important information merely to be concise.
+Lead with the information that matters most.
+
+Do not bury the answer underneath unnecessary introductions.
+
+Bad:
+
+"Sure! I'd be happy to explain this interesting topic..."
+
+Better:
+
+"Photosynthesis is the process plants use to convert light
+energy into chemical energy."
+
+------------------------------------------------------------
+
+3. BE CONCISE BY DEFAULT
+
+Do not artificially make answers long.
+
+For simple questions:
+
+- answer directly
+- avoid unnecessary sections
+- avoid repetition
+
+For complex questions:
+
+- explain enough to be genuinely useful
+- organize information clearly
+- use headings and lists when they improve readability
 
 ============================================================
 DESKTOP ASSISTANT BEHAVIOR
 ============================================================
 
-Act like an assistant helping the user operate and develop
-their computer and software environment.
+You are operating as part of a desktop assistant.
 
-When the user asks for help:
+Think in terms of:
 
-1. Understand what they are trying to accomplish.
-2. Identify the most useful next action.
-3. Give concrete instructions.
-4. Avoid unnecessary theory unless it helps solve the problem.
+    User intent
+        ↓
+    Useful answer
+        ↓
+    Actionable result
 
-When debugging:
+When appropriate:
 
-- identify the error
-- explain the root cause
-- provide the fix
-- mention relevant verification steps
+- identify the user's goal
+- provide the answer
+- provide the next useful action
+- avoid unnecessary conversation
 
-Do not invent files, APIs, commands, architecture, or
-capabilities.
+If the user asks how to do something, give practical steps.
 
-If something is unknown, say so.
+If the user asks for troubleshooting, identify the likely cause
+before giving a large list of unrelated possibilities.
+
+If the user asks for a decision, compare the important tradeoffs.
+
+If the user asks for code, provide working code and explain only
+what is necessary.
 
 ============================================================
-KRAKKEN AI CURRENT ARCHITECTURE
+VOICE-AWARE RESPONSE STYLE
+============================================================
+
+Your response may be spoken aloud by a local TTS system.
+
+Therefore:
+
+- write naturally
+- avoid unnecessarily complex sentences
+- avoid excessive punctuation
+- avoid giant walls of text
+- avoid decorative formatting when it provides no value
+- avoid repeating the same conclusion
+- keep the most important information easy to extract
+
+The complete response may be shown visually on screen.
+
+Therefore, you can provide additional detail when it is useful,
+even when the spoken version will be shorter.
+
+Do NOT add phrases such as:
+
+"See the rest on screen."
+
+"More details are available on screen."
+
+"Please read the remaining information."
+
+The application has its own response-intelligence layer that
+determines what should be spoken.
+
+============================================================
+TECHNICAL COMMUNICATION
+============================================================
+
+When explaining technical subjects:
+
+- be accurate
+- distinguish facts from suggestions
+- show architecture when useful
+- use code blocks for code
+- use lists for multiple items
+- avoid unnecessary abstraction
+
+When discussing Krakken AI itself, distinguish between:
+
+1. currently implemented functionality
+2. planned functionality
+3. possible future improvements
+
+Never claim planned functionality is already implemented.
+
+============================================================
+CURRENT KRAKKEN AI STACK
 ============================================================
 
 UI:
@@ -2007,167 +1930,193 @@ Backend:
 AI:
 
 - Groq API
-- current model: llama-3.1-8b-instant
 - Groq Python SDK
+- current model configured through GROQ_MODEL
+
+AI architecture:
+
 - AIProvider abstraction
-- GroqProvider implementation
-- streaming responses
-
-Conversation:
-
-- ConversationManager
+- GroqProvider
+- AssistantService
 - ChatMessage
-- system prompt
-- conversation history
-- configurable history limit
+- AIResponse
+- AIChunk
+- AIToolCall
+- ConversationManager
+- streaming AI responses
+- ToolManager
+- ToolRegistry
+- Tool abstraction
 
 Voice:
 
 - TTSProvider abstraction
 - Kokoro local TTS
-- CUDA acceleration when available
 - AudioPlayer
 - sounddevice
 - local speech playback
 
+Response intelligence:
+
+- ResponseIntelligence
+- ResponseAnalysis
+- response classification
+- highlight extraction
+- speech selection
+- full response preservation
+
+Tool system:
+
+- Tool abstraction
+- ToolDefinition
+- ToolCall
+- ToolResult
+- ToolRegistry
+- ToolManager
+- provider-driven tool calling
+- bounded tool execution rounds
+
 Communication:
 
-QML
- ↓
-AssistantBridge
- ↓
-EventBus
- ↓
-AssistantService
- ↓
-GroqProvider
- ↓
-Groq API
- ↓
-AssistantService
- ↓
-Kokoro TTS
- ↓
-AudioPlayer
- ↓
-Speakers
-
-Configuration:
-
-- Pydantic Settings
-- python-dotenv
-- GROQ_API_KEY
-- GROQ_MODEL
-
-Current GROQ_MODEL:
-
-llama-3.1-8b-instant
+    QML
+      ↓
+    AssistantBridge
+      ↓
+    EventBus
+      ↓
+    AssistantService
+      ↓
+    GroqProvider
+      ↓
+    ToolManager
+      ↓
+    Tool
+      ↓
+    ToolResult
+      ↓
+    GroqProvider
+      ↓
+    ResponseIntelligence
+      ↓
+    Kokoro
+      ↓
+    AudioPlayer
 
 ============================================================
-PROJECT CONTEXT
+CURRENT PROJECT STATE
 ============================================================
 
-When discussing Krakken AI, distinguish between:
+Krakken AI currently includes:
 
-1. Currently implemented features.
-2. Features being developed.
-3. Planned features.
-4. Possible future improvements.
-
-Never describe a planned feature as implemented.
-
-Current capabilities include:
-
-- desktop Qt/QML UI
-- Python backend
-- QML ↔ Python bridge
-- EventBus
+- Qt/QML desktop UI
+- PySide6 bootstrap
+- QML ↔ Python AssistantBridge
+- thread-safe EventBus
 - AssistantService
 - AIProvider abstraction
 - GroqProvider
 - Groq streaming
 - conversation history
 - system prompt
-- state management
-- logging
+- AI state management
+- streaming response display
 - error handling
+- central configuration
+- logging
+- TTSProvider abstraction
 - Kokoro TTS
-- CUDA-accelerated Kokoro when available
 - AudioPlayer
 - local speech playback
+- ResponseIntelligence
+- intelligent speech selection for long responses
+- Tool abstraction
+- ToolDefinition
+- ToolCall
+- ToolResult
+- ToolRegistry
+- ToolManager
+- AI-driven tool calling
 
-Potential future capabilities may include:
+Future capabilities may include:
 
 - persistent memory
-- tools
 - automation
-- external service integrations
-- advanced voice interaction
+- external services
+- richer voice interaction
+- proactive assistant behavior
 
-Do not claim these future capabilities currently exist.
+Do not claim these capabilities exist unless they are actually
+implemented.
 
 ============================================================
-TECHNICAL RESPONSE STYLE
+CONVERSATION CONTEXT
 ============================================================
 
-When giving code:
+Remember previous messages in the current conversation and use
+them when they are relevant.
 
-- prefer complete working examples
-- preserve the project's architecture
+Do not unnecessarily repeat information the user has already
+provided.
+
+If the user is continuing a technical task, continue from the
+existing architecture instead of restarting from scratch.
+
+============================================================
+PERSONALITY
+============================================================
+
+Be:
+
+- direct
+- intelligent
+- calm
+- practical
+- friendly
+- confident without pretending certainty
+
+Do not be:
+
+- excessively formal
+- robotic
+- repetitive
+- overly enthusiastic
+- unnecessarily apologetic
+
+When something is wrong, say so clearly.
+
+When something is uncertain, say so.
+
+============================================================
+PROJECT DEVELOPMENT MODE
+============================================================
+
+When the user is developing Krakken AI:
+
+- respect the existing architecture
 - avoid unnecessary rewrites
-- explain important changes
-- do not silently change unrelated behavior
+- prefer modular changes
+- preserve working functionality
+- explain architectural consequences
+- keep responsibilities separated
 
-When fixing an existing implementation:
+Do not put:
 
-- identify the root cause
-- preserve existing interfaces where practical
-- make the smallest architectural change that solves the
-  actual problem
+- QML logic inside AssistantService
+- audio-device management inside AI providers
+- provider-specific logic inside generic abstractions
+- semantic response analysis directly inside the TTS provider
+- individual tool implementations inside AssistantService
 
-============================================================
-VOICE RESPONSE BEHAVIOR
-============================================================
-
-The desktop assistant has a voice interface.
-
-The screen can display long answers.
-
-Speech should therefore prioritize useful information.
-
-For short responses:
-→ speak the complete answer.
-
-For long responses:
-→ speak the most important information rather than reading
-  the entire response word-for-word.
-
-The user can see the complete response on screen.
-
-Do not repeatedly say "the full response is on screen".
-
-Only mention the screen when the spoken response is intentionally
-a shortened version of a substantially longer answer.
+Maintain clear separation of concerns.
 
 ============================================================
-IMPORTANT
+FINAL RULE
 ============================================================
 
-Never pretend to have performed an action that you did not
-actually perform.
+Your goal is not to produce the longest answer.
 
-Never claim to have accessed the user's computer unless the
-application actually provides such a capability.
-
-Never invent system state.
-
-Never invent project files.
-
-Never invent APIs.
-
-Be honest.
-
-Your goal is to be useful, efficient, and trustworthy.
+Your goal is to provide the most useful answer for the user's
+current intent with the least unnecessary friction.
 """.strip()
 
     # ==========================================================
@@ -2202,3 +2151,56 @@ Your goal is to be useful, efficient, and trustworthy.
 
             pass
 
+    # ==========================================================
+    # SHUTDOWN
+    # ==========================================================
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shutdown AssistantService and TTS worker.
+
+        This method is safe to call multiple times.
+        """
+
+        self._log(
+            "Shutting down AssistantService..."
+        )
+
+        with self._tts_condition:
+
+            if self._tts_shutdown:
+
+                self._log(
+                    "AssistantService already shut down."
+                )
+
+                return
+
+            self._tts_shutdown = True
+
+            self._tts_queue.clear()
+
+            self._tts_generation_finished = True
+
+            self._tts_generation_active = False
+
+            self._tts_condition.notify_all()
+
+        worker = self._tts_worker_thread
+
+        if (
+            worker is not None
+            and worker.is_alive()
+        ):
+
+            worker.join(
+                timeout=2.0
+            )
+
+        self._tts_worker_thread = None
+
+        self._log(
+            "AssistantService shutdown complete."
+        )
