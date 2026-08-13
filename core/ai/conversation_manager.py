@@ -1,46 +1,31 @@
-
 """
-Krakken AI - Conversation Manager.
+Conversation management for Krakken AI.
 
-Responsible for managing the active conversation history.
+Maintains provider-ready conversation history while preserving
+the system prompt.
 
-Responsibilities:
+Supports:
 
-    - Store conversation messages
-    - Preserve the system prompt
-    - Add user messages
-    - Add assistant messages
-    - Enforce maximum history size
-    - Provide provider-ready messages
-    - Clear conversation history
-
-This class contains no Qt/QML code.
-It is independent of the AI provider and EventBus.
+    system messages
+    user messages
+    assistant messages
+    assistant tool calls
+    tool results
 """
 
 from __future__ import annotations
 
 from threading import RLock
 
-from core.ai.models import ChatMessage
+from core.ai.models import (
+    AIToolCall,
+    ChatMessage,
+)
 
 
 class ConversationManager:
     """
-    Manages the conversation history used by Krakken AI.
-
-    The system prompt is always preserved at the beginning
-    of the conversation.
-
-    Example:
-
-        ConversationManager
-            ↓
-        [system]
-        [user]
-        [assistant]
-        [user]
-        [assistant]
+    Thread-safe conversation history manager.
     """
 
     def __init__(
@@ -49,30 +34,25 @@ class ConversationManager:
         max_messages: int = 40,
     ) -> None:
 
-        if not isinstance(
-            system_prompt,
-            str,
-        ):
-            raise TypeError(
-                "system_prompt must be a string."
-            )
+        if max_messages < 1:
 
-        if max_messages <= 0:
             raise ValueError(
-                "max_messages must be greater than zero."
+                "max_messages must be at least 1."
             )
 
         self._lock = RLock()
 
-        self._system_prompt = system_prompt.strip()
+        self._system_prompt = (
+            system_prompt.strip()
+        )
 
-        self._max_messages = max_messages
+        self._max_messages = (
+            max_messages
+        )
 
-        self._messages: list[ChatMessage] = []
-
-        # ------------------------------------------------------
-        # Always initialize with the system prompt.
-        # ------------------------------------------------------
+        self._messages: list[
+            ChatMessage
+        ] = []
 
         self._messages.append(
             ChatMessage(
@@ -81,161 +61,78 @@ class ConversationManager:
             )
         )
 
-    # ==========================================================
-    # PROPERTIES
-    # ==========================================================
-
-    @property
-    def system_prompt(self) -> str:
-        """
-        Return the current system prompt.
-        """
-
-        return self._system_prompt
-
-    @property
-    def max_messages(self) -> int:
-        """
-        Return the maximum number of non-system messages
-        retained in conversation history.
-        """
-
-        return self._max_messages
-
-    @property
-    def count(self) -> int:
-        """
-        Return the number of non-system messages.
-
-        The system prompt is intentionally excluded.
-        """
-
-        with self._lock:
-
-            return max(
-                0,
-                len(self._messages) - 1,
-            )
-
-    # ==========================================================
-    # MESSAGE ACCESS
-    # ==========================================================
-
-    def messages(self) -> list[ChatMessage]:
-        """
-        Return a copy of the complete conversation.
-
-        Includes the system prompt.
-        """
-
-        with self._lock:
-
-            return list(
-                self._messages
-            )
-
-    def to_list(self) -> list[ChatMessage]:
-        """
-        Return a copy of the complete conversation.
-
-        This is provided as a convenient compatibility API
-        for AssistantService.history.
-        """
-
-        with self._lock:
-
-            return list(
-                self._messages
-            )
-
-    # ==========================================================
-    # ADD USER MESSAGE
-    # ==========================================================
+    # ========================================================
+    # ADD MESSAGES
+    # ========================================================
 
     def add_user_message(
         self,
         content: str,
     ) -> None:
-        """
-        Add a user message to the conversation.
-        """
 
-        self._add_message(
+        self._add(
             ChatMessage(
                 role="user",
-                content=self._validate_content(
-                    content
-                ),
+                content=content,
             )
         )
-
-    # ==========================================================
-    # ADD ASSISTANT MESSAGE
-    # ==========================================================
 
     def add_assistant_message(
         self,
         content: str,
     ) -> None:
-        """
-        Add an assistant message to the conversation.
-        """
 
-        self._add_message(
+        self._add(
             ChatMessage(
                 role="assistant",
-                content=self._validate_content(
-                    content
-                ),
+                content=content,
             )
         )
 
-    # ==========================================================
-    # GENERIC MESSAGE
-    # ==========================================================
-
-    def add_message(
+    def add_assistant_tool_calls(
         self,
-        message: ChatMessage,
+        content: str,
+        tool_calls: list[AIToolCall],
     ) -> None:
         """
-        Add an arbitrary ChatMessage.
-
-        Useful for future tool/function messages.
+        Store an assistant message containing tool calls.
         """
 
-        if not isinstance(
-            message,
-            ChatMessage,
-        ):
-            raise TypeError(
-                "message must be a ChatMessage instance."
+        self._add(
+            ChatMessage(
+                role="assistant",
+                content=content,
+                tool_calls=tool_calls,
             )
-
-        if message.role == "system":
-
-            raise ValueError(
-                "System messages cannot be added "
-                "through add_message()."
-            )
-
-        self._add_message(
-            message
         )
 
-    # ==========================================================
-    # INTERNAL MESSAGE HANDLING
-    # ==========================================================
+    def add_tool_message(
+        self,
+        content: str,
+        tool_call_id: str,
+        name: str | None = None,
+    ) -> None:
+        """
+        Store the result returned by a tool.
+        """
 
-    def _add_message(
+        self._add(
+            ChatMessage(
+                role="tool",
+                content=content,
+                tool_call_id=tool_call_id,
+                name=name,
+            )
+        )
+
+    # ========================================================
+    # INTERNAL ADD
+    # ========================================================
+
+    def _add(
         self,
         message: ChatMessage,
     ) -> None:
-        """
-        Add a message and enforce the history limit.
-
-        The system prompt is never removed.
-        """
 
         with self._lock:
 
@@ -243,53 +140,50 @@ class ConversationManager:
                 message
             )
 
-            self._trim_history()
+            self._trim()
 
-    # ==========================================================
-    # HISTORY LIMIT
-    # ==========================================================
+    # ========================================================
+    # HISTORY
+    # ========================================================
 
-    def _trim_history(self) -> None:
-        """
-        Keep only the newest non-system messages.
+    def messages(
+        self,
+    ) -> list[ChatMessage]:
 
-        Example:
+        with self._lock:
 
-            max_messages = 4
+            return list(
+                self._messages
+            )
 
-            system
-            user
-            assistant
-            user
-            assistant
+    def to_list(
+        self,
+    ) -> list[ChatMessage]:
 
-        Older messages are removed first.
-        """
+        return self.messages()
 
-        # System message + max non-system messages.
-        maximum_total_messages = (
-            1 +
-            self._max_messages
-        )
+    # ========================================================
+    # COUNT
+    # ========================================================
 
-        while (
-            len(self._messages)
-            > maximum_total_messages
-        ):
+    @property
+    def count(self) -> int:
 
-            # Never remove index 0 because it is
-            # the system prompt.
-            self._messages.pop(1)
+        with self._lock:
 
-    # ==========================================================
+            return len(
+                [
+                    message
+                    for message in self._messages
+                    if message.role != "system"
+                ]
+            )
+
+    # ========================================================
     # CLEAR
-    # ==========================================================
+    # ========================================================
 
     def clear(self) -> None:
-        """
-        Clear all conversation messages while preserving
-        the system prompt.
-        """
 
         with self._lock:
 
@@ -302,148 +196,34 @@ class ConversationManager:
                 )
             )
 
-    # ==========================================================
-    # UPDATE SYSTEM PROMPT
-    # ==========================================================
+    # ========================================================
+    # TRIMMING
+    # ========================================================
 
-    def set_system_prompt(
-        self,
-        system_prompt: str,
-    ) -> None:
+    def _trim(self) -> None:
         """
-        Replace the current system prompt.
+        Keep the system prompt and the most recent messages.
 
-        Existing conversation messages are preserved.
+        Tool-call groups are treated conservatively. We avoid
+        trimming in the middle of a very recent interaction
+        whenever possible.
         """
 
-        system_prompt = self._validate_content(
-            system_prompt
+        system_message = self._messages[0]
+
+        conversation = (
+            self._messages[1:]
         )
 
-        with self._lock:
+        if len(conversation) <= self._max_messages:
 
-            self._system_prompt = system_prompt
+            return
 
-            self._messages[0] = ChatMessage(
-                role="system",
-                content=system_prompt,
-            )
+        conversation = conversation[
+            -self._max_messages:
+        ]
 
-    # ==========================================================
-    # LAST MESSAGE
-    # ==========================================================
-
-    def last_message(
-        self,
-    ) -> ChatMessage | None:
-        """
-        Return the most recent message.
-
-        Returns None when the conversation contains
-        only the system prompt.
-        """
-
-        with self._lock:
-
-            if len(self._messages) <= 1:
-                return None
-
-            return self._messages[-1]
-
-    # ==========================================================
-    # LAST USER MESSAGE
-    # ==========================================================
-
-    def last_user_message(
-        self,
-    ) -> ChatMessage | None:
-        """
-        Return the most recent user message.
-        """
-
-        with self._lock:
-
-            for message in reversed(
-                self._messages
-            ):
-
-                if message.role == "user":
-
-                    return message
-
-        return None
-
-    # ==========================================================
-    # LAST ASSISTANT MESSAGE
-    # ==========================================================
-
-    def last_assistant_message(
-        self,
-    ) -> ChatMessage | None:
-        """
-        Return the most recent assistant message.
-        """
-
-        with self._lock:
-
-            for message in reversed(
-                self._messages
-            ):
-
-                if message.role == "assistant":
-
-                    return message
-
-        return None
-
-    # ==========================================================
-    # REMOVE LAST MESSAGE
-    # ==========================================================
-
-    def remove_last_message(
-        self,
-    ) -> ChatMessage | None:
-        """
-        Remove and return the newest non-system message.
-
-        The system prompt can never be removed.
-        """
-
-        with self._lock:
-
-            if len(self._messages) <= 1:
-
-                return None
-
-            return self._messages.pop()
-
-    # ==========================================================
-    # VALIDATION
-    # ==========================================================
-
-    @staticmethod
-    def _validate_content(
-        content: str,
-    ) -> str:
-        """
-        Validate and normalize message content.
-        """
-
-        if not isinstance(
-            content,
-            str,
-        ):
-            raise TypeError(
-                "Message content must be a string."
-            )
-
-        content = content.strip()
-
-        if not content:
-
-            raise ValueError(
-                "Message content cannot be empty."
-            )
-
-        return content
-
+        self._messages = [
+            system_message,
+            *conversation,
+        ]
