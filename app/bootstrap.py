@@ -44,6 +44,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from core.tools.builtin.open_app_tool import OpenAppTool
 from core.tools.builtin.open_tool import OpenTool
 
 # Realtime internet tools
@@ -88,6 +89,7 @@ from core.tools.tool_manager import ToolManager
 # ============================================================
 from core.voice.audio_player import AudioPlayer
 from core.voice.providers.kokoro_provider import KokoroProvider
+from core.voice.voice_input_service import VoiceInputService
 
 # ============================================================
 # APPLICATION BOOTSTRAP
@@ -130,6 +132,8 @@ class ApplicationBootstrap:
         self.tts_provider: KokoroProvider | None = None
 
         self.audio_player: AudioPlayer | None = None
+
+        self.voice_input_service: VoiceInputService | None = None
 
         # ------------------------------------------------------
         # Tools
@@ -428,6 +432,40 @@ class ApplicationBootstrap:
         )
 
         # ======================================================
+        # VOICE INPUT / STT
+        # ======================================================
+
+        logger.info(
+            "Initializing VoiceInputService..."
+        )
+
+        try:
+
+            self.voice_input_service = VoiceInputService(
+                api_key=config.groq_api_key,
+                model=config.groq_stt_model,
+                language=config.voice_input_language,
+                logger=logger,
+            )
+
+        except Exception as exc:
+
+            logger.error(
+                f"Failed to initialize VoiceInputService: {exc}"
+            )
+
+            raise
+
+        container.register_singleton(
+            "voice_input_service",
+            self.voice_input_service,
+        )
+
+        logger.success(
+            "VoiceInputService initialized."
+        )
+
+        # ======================================================
         # ASSISTANT SERVICE
         # ======================================================
 
@@ -498,6 +536,7 @@ class ApplicationBootstrap:
         self.bridge = AssistantBridge(
             event_bus=event_bus,
             logger=logger,
+            voice_input_service=self.voice_input_service,
         )
 
         container.register_singleton(
@@ -615,6 +654,39 @@ class ApplicationBootstrap:
 
         logger.success(
             "Realtime URL/open tool registered."
+        )
+
+        # ======================================================
+        # OPEN APP
+        # ======================================================
+
+        logger.info(
+            "Registering open app tool..."
+        )
+
+        try:
+
+            open_app_tool = OpenAppTool(
+                logger=logger,
+            )
+
+            self.tool_registry.register(
+                open_app_tool
+            )
+
+        except Exception as exc:
+
+            logger.error(
+                (
+                    "Failed to register "
+                    f"OpenAppTool: {exc}"
+                )
+            )
+
+            raise
+
+        logger.success(
+            "Open app tool registered."
         )
 
         # ======================================================
