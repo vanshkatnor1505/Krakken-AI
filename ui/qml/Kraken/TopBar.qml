@@ -15,6 +15,38 @@ Rectangle {
 
     implicitHeight: Theme.topBarHeight
 
+    // ----------------------------------------------------------
+    // Status
+    //
+    // Exposed as bindable properties so a backend (context
+    // property, singleton, etc.) can bind to them later without
+    // any changes needed here.
+    //
+    // e.g. root.statusText: SystemMonitor.online ? "ONLINE" : "OFFLINE"
+    //      root.statusState: SystemMonitor.online ? "success" : "danger"
+    // ----------------------------------------------------------
+
+    property string statusText: "ONLINE"
+    property string statusState: "success"
+
+    readonly property color statusColor: {
+
+        switch (statusState) {
+
+        case "success":
+            return Theme.accentGreen
+
+        case "warning":
+            return Theme.warning
+
+        case "danger":
+            return Theme.danger
+
+        default:
+            return Theme.accent
+        }
+    }
+
     RowLayout {
 
         anchors.fill: parent
@@ -45,7 +77,7 @@ Rectangle {
 
             radius: 6
 
-            color: Theme.accentGreen
+            color: root.statusColor
 
             SequentialAnimation on opacity {
 
@@ -67,9 +99,9 @@ Rectangle {
 
         Text {
 
-            text: "ONLINE"
+            text: root.statusText
 
-            color: Theme.accentGreen
+            color: root.statusColor
 
             font.pixelSize: Theme.fontBody
 
