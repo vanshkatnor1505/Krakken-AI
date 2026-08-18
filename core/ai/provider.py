@@ -821,6 +821,16 @@ class GroqProvider(AIProvider):
 
         message = str(exc)
 
+        if (
+            "model_not_found" in message
+            or "does not exist or you do not have access" in message
+        ):
+
+            message = (
+                f"Configured Groq model '{self._model}' is unavailable. "
+                "Update GROQ_MODEL in your .env file to a supported Groq model."
+            )
+
         self._log(
             f"Groq request failed: {message}",
             error=True,
