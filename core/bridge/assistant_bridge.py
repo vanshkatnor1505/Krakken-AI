@@ -40,6 +40,10 @@ from PySide6.QtCore import (
 )
 
 from core.events.event_bus import Event, EventBus
+from core.voice.voice_input_service import (
+    VoiceInputService,
+    VoiceInputServiceError,
+)
 
 
 class AssistantBridge(QObject):
@@ -64,6 +68,10 @@ class AssistantBridge(QObject):
     historyCleared = Signal()
 
     highlightsReady = Signal(list)
+
+    transcriptReady = Signal(str)
+
+    recordingChanged = Signal(bool)
 
     # ==========================================================
     # INTERNAL RELAYS
@@ -90,14 +98,17 @@ class AssistantBridge(QObject):
         self,
         event_bus: EventBus | None = None,
         logger: Any = None,
+        voice_input_service: VoiceInputService | None = None,
     ) -> None:
 
         super().__init__()
 
         self.event_bus = event_bus
         self.logger = logger
+        self.voice_input_service = voice_input_service
 
         self._state = "idle"
+        self._is_recording = False
 
         # ------------------------------------------------------
         # Internal Qt relays
@@ -186,6 +197,15 @@ class AssistantBridge(QObject):
         notify=stateChanged,
     )
 
+    def _get_is_recording(self) -> bool:
+        return self._is_recording
+
+    isRecording = Property(
+        bool,
+        _get_is_recording,
+        notify=recordingChanged,
+    )
+
     # ==========================================================
     # STATE
     # ==========================================================
@@ -212,6 +232,83 @@ class AssistantBridge(QObject):
         self._stateRelay.emit(
             state
         )
+
+    # ==========================================================
+    # VOICE INPUT
+    # ==========================================================
+
+    @Slot()
+    def startVoiceInput(self) -> None:
+        if self.voice_input_service is None:
+            self._handle_error(
+                "Voice input service is not available."
+            )
+            return
+
+        if self._is_recording:
+            return
+
+        try:
+            self.voice_input_service.start_recording()
+            self._is_recording = True
+            self.recordingChanged.emit(True)
+            self.set_state("recording")
+            self._log("Voice recording started.")
+
+        except Exception as exc:
+            self._handle_error(
+                f"Failed to start voice recording: {exc}"
+            )
+
+    @Slot()
+    def stopVoiceInput(self) -> None:
+        if self.voice_input_service is None:
+            self._handle_error(
+                "Voice input service is not available."
+            )
+            return
+
+        if not self._is_recording and not self.voice_input_service.is_recording:
+            return
+
+        self._is_recording = False
+        self.recordingChanged.emit(False)
+        self.set_state("processing")
+
+        def _transcribe() -> None:
+            try:
+                transcript = self.voice_input_service.capture_and_transcribe()
+
+                if not transcript:
+                    self._log("Voice input produced an empty transcript.")
+                    self.set_state("idle")
+                    return
+
+                self.set_state("idle")
+                self.transcriptReady.emit(transcript)
+
+            except VoiceInputServiceError as exc:
+                self._handle_error(str(exc))
+
+            except Exception as exc:
+                self._handle_error(
+                    f"Voice transcription failed: {exc}"
+                )
+
+        from threading import Thread
+
+        Thread(
+            target=_transcribe,
+            name="Krakken-Voice-STT",
+            daemon=True,
+        ).start()
+
+    @Slot()
+    def toggleVoiceInput(self) -> None:
+        if self._is_recording:
+            self.stopVoiceInput()
+        else:
+            self.startVoiceInput()
 
     # ==========================================================
     # QML → BACKEND
