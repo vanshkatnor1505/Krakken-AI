@@ -1,4 +1,3 @@
-
 import QtQuick
 import QtQuick.Layouts
 
@@ -22,35 +21,60 @@ Rectangle {
     // ----------------------------------------------------------
     // Status data
     //
-    // These are placeholders for now.
-    // Later they will be connected to the Python backend.
+    // Each entry is exposed as its own bindable property so a
+    // backend (context property, singleton, etc.) can bind to
+    // it later without any changes needed here.
+    //
+    // e.g. root.cpuValue: SystemMonitor.cpuUsage + "%"
     // ----------------------------------------------------------
 
+    property string cpuLabel: "CPU"
+    property string cpuValue: "0%"
+    property string cpuState: "normal"
+
+    property string ramLabel: "RAM"
+    property string ramValue: "0%"
+    property string ramState: "normal"
+
+    property string voiceLabel: "VOICE"
+    property string voiceValue: "READY"
+    property string voiceState: "success"
+
+    property string aiLabel: "AI"
+    property string aiValue: "ONLINE"
+    property string aiState: "success"
+
+    property string memoryLabel: "MEMORY"
+    property string memoryValue: "READY"
+    property string memoryState: "success"
+
+    // Model built from the properties above. This recalculates
+    // automatically whenever any of the bound properties change.
     readonly property var statusItems: [
         {
-            label: "CPU",
-            value: "0%",
-            state: "normal"
+            label: cpuLabel,
+            value: cpuValue,
+            state: cpuState
         },
         {
-            label: "RAM",
-            value: "0%",
-            state: "normal"
+            label: ramLabel,
+            value: ramValue,
+            state: ramState
         },
         {
-            label: "VOICE",
-            value: "READY",
-            state: "success"
+            label: voiceLabel,
+            value: voiceValue,
+            state: voiceState
         },
         {
-            label: "AI",
-            value: "ONLINE",
-            state: "success"
+            label: aiLabel,
+            value: aiValue,
+            state: aiState
         },
         {
-            label: "MEMORY",
-            value: "READY",
-            state: "success"
+            label: memoryLabel,
+            value: memoryValue,
+            state: memoryState
         }
     ]
 
@@ -215,4 +239,3 @@ Rectangle {
         }
     }
 }
-
