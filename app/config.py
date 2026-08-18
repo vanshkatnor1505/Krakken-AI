@@ -61,7 +61,15 @@ class AppConfig(BaseSettings):
     )
 
     groq_model: str = Field(
-        default="llama-3.1-8b-instant"
+        default="openai/gpt-oss-20b"
+    )
+
+    groq_stt_model: str = Field(
+        default="whisper-large-v3-turbo"
+    )
+
+    voice_input_language: str = Field(
+        default="en"
     )
 
     openai_api_key: str = Field(
