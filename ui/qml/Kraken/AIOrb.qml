@@ -1,4 +1,3 @@
-
 import QtQuick
 
 import Kraken
@@ -118,6 +117,47 @@ Item {
 
         width: 300
         height: 300
+
+        // ======================================================
+        // AMBIENT GLOW (soft layered halo behind everything)
+        // ======================================================
+
+        Item {
+
+            id: glow
+
+            anchors.centerIn: parent
+
+            width: 300
+            height: 300
+
+            Repeater {
+
+                model: 4
+
+                delegate: Rectangle {
+
+                    anchors.centerIn: parent
+
+                    width: 190 + index * 34
+                    height: width
+
+                    radius: width / 2
+
+                    color: "transparent"
+
+                    border.width: 1
+
+                    border.color: root.stateColor
+
+                    opacity: 0.05 - index * 0.008
+
+                    Behavior on border.color {
+                        ColorAnimation { duration: Theme.medium }
+                    }
+                }
+            }
+        }
 
         // ======================================================
         // OUTER ENERGY FIELD
@@ -370,6 +410,16 @@ Item {
                    * orbitRadius
                    - height / 2
 
+                // subtle soft trail behind each particle
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.width * 2.4
+                    height: parent.height * 2.4
+                    radius: width / 2
+                    color: root.stateColor
+                    opacity: 0.18
+                }
+
                 SequentialAnimation on orbitAngle {
 
                     running: root.animated
@@ -415,8 +465,6 @@ Item {
 
             radius: width / 2
 
-            color: Theme.background
-
             border.width: 2
 
             border.color: root.stateColor
@@ -424,6 +472,16 @@ Item {
             scale: 1.0
 
             layer.enabled: true
+
+            // Glass-like depth instead of a flat fill
+            gradient: Gradient {
+
+                orientation: Gradient.Vertical
+
+                GradientStop { position: 0.0; color: Qt.lighter(Theme.background, 1.35) }
+                GradientStop { position: 0.45; color: Theme.background }
+                GradientStop { position: 1.0; color: Qt.darker(Theme.background, 1.15) }
+            }
 
             SequentialAnimation on scale {
 
@@ -473,11 +531,17 @@ Item {
 
                 radius: width / 2
 
-                color: root.stateColor
-
                 opacity: 0.88
 
                 scale: 1.0
+
+                gradient: Gradient {
+
+                    orientation: Gradient.Vertical
+
+                    GradientStop { position: 0.0; color: Qt.lighter(root.stateColor, 1.25) }
+                    GradientStop { position: 1.0; color: Qt.darker(root.stateColor, 1.1) }
+                }
 
                 SequentialAnimation on scale {
 
@@ -526,14 +590,6 @@ Item {
                         to: 0.65
 
                         duration: root.pulseDuration
-                    }
-                }
-
-                Behavior on color {
-
-                    ColorAnimation {
-
-                        duration: Theme.medium
                     }
                 }
             }
@@ -587,6 +643,27 @@ Item {
             }
 
             // ==================================================
+            // SPECULAR HIGHLIGHT (glass sheen, upper-left)
+            // ==================================================
+
+            Rectangle {
+
+                width: 56
+                height: 30
+
+                radius: height / 2
+
+                x: parent.width * 0.22
+                y: parent.height * 0.16
+
+                rotation: -28
+
+                color: "white"
+
+                opacity: 0.10
+            }
+
+            // ==================================================
             // AI SYMBOL
             // ==================================================
 
@@ -605,6 +682,10 @@ Item {
                 font.letterSpacing: 3
 
                 scale: 1.0
+
+                style: Text.Raised
+
+                styleColor: Qt.rgba(0, 0, 0, 0.25)
             }
         }
     }
@@ -613,7 +694,9 @@ Item {
     // STATE LABEL
     // ==========================================================
 
-    Text {
+    Rectangle {
+
+        id: labelChip
 
         visible: root.showLabel
 
@@ -623,45 +706,73 @@ Item {
 
         anchors.topMargin: Theme.spacingL
 
-        text: {
+        width: stateLabel.implicitWidth + 24
+        height: stateLabel.implicitHeight + 10
 
-            switch (root.state) {
-
-            case "listening":
-                return "LISTENING"
-
-            case "thinking":
-                return "THINKING"
-
-            case "speaking":
-                return "SPEAKING"
-
-            case "processing":
-                return "PROCESSING"
-
-            case "error":
-                return "SYSTEM ERROR"
-
-            default:
-                return "READY"
-            }
-        }
+        radius: height / 2
 
         color: root.stateColor
 
-        font.pixelSize: Theme.fontSmall
+        opacity: 0.10
 
-        font.bold: true
+        border.width: 1
 
-        font.letterSpacing: 3
-
-        opacity: 0.95
+        border.color: root.stateColor
 
         Behavior on color {
+            ColorAnimation { duration: Theme.medium }
+        }
 
-            ColorAnimation {
+        Behavior on border.color {
+            ColorAnimation { duration: Theme.medium }
+        }
 
-                duration: Theme.medium
+        Text {
+
+            id: stateLabel
+
+            anchors.centerIn: parent
+
+            text: {
+
+                switch (root.state) {
+
+                case "listening":
+                    return "LISTENING"
+
+                case "thinking":
+                    return "THINKING"
+
+                case "speaking":
+                    return "SPEAKING"
+
+                case "processing":
+                    return "PROCESSING"
+
+                case "error":
+                    return "SYSTEM ERROR"
+
+                default:
+                    return "READY"
+                }
+            }
+
+            color: root.stateColor
+
+            font.pixelSize: Theme.fontSmall
+
+            font.bold: true
+
+            font.letterSpacing: 3
+
+            opacity: 1.0
+
+            Behavior on color {
+
+                ColorAnimation {
+
+                    duration: Theme.medium
+                }
             }
         }
     }
@@ -727,4 +838,3 @@ Item {
         }
     }
 }
-
