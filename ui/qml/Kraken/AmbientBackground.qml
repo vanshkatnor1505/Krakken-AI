@@ -1,4 +1,3 @@
-
 import QtQuick
 
 import Kraken
@@ -111,7 +110,14 @@ Item {
 
         anchors.fill: parent
 
-        color: "#050812"
+        gradient: Gradient {
+
+            orientation: Gradient.Vertical
+
+            GradientStop { position: 0.0; color: "#080B1A" }
+            GradientStop { position: 0.55; color: "#050812" }
+            GradientStop { position: 1.0; color: "#03040A" }
+        }
     }
 
     // ==========================================================
@@ -185,6 +191,25 @@ Item {
 
                 easing.type: Easing.InOutSine
             }
+        }
+
+        // radial-style falloff: brighter core fading toward the edge
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.62
+            height: width
+            radius: width / 2
+            color: parent.color
+            opacity: 0.55
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.30
+            height: width
+            radius: width / 2
+            color: parent.color
+            opacity: 0.55
         }
     }
 
@@ -260,6 +285,15 @@ Item {
                 easing.type: Easing.InOutSine
             }
         }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.60
+            height: width
+            radius: width / 2
+            color: parent.color
+            opacity: 0.5
+        }
     }
 
     // ==========================================================
@@ -319,6 +353,15 @@ Item {
 
                 easing.type: Easing.InOutSine
             }
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.5
+            height: width
+            radius: width / 2
+            color: parent.color
+            opacity: 0.6
         }
     }
 
@@ -391,6 +434,30 @@ Item {
                 opacity: 0.30
             }
         }
+
+        // faint intersection dots for a more deliberate "tech" texture
+        Repeater {
+
+            model: Math.ceil(root.width / 50) * Math.ceil(root.height / 50)
+
+            delegate: Rectangle {
+
+                property int cols: Math.ceil(root.width / 50)
+
+                width: 2
+                height: 2
+
+                radius: 1
+
+                x: (index % cols) * 50 - 1
+
+                y: Math.floor(index / cols) * 50 - 1
+
+                color: root.stateColor
+
+                opacity: 0.25
+            }
+        }
     }
 
     // ==========================================================
@@ -437,6 +504,16 @@ Item {
 
                     duration: Theme.medium
                 }
+            }
+
+            // soft halo so particles read as glowing motes, not flat dots
+            Rectangle {
+                anchors.centerIn: parent
+                width: parent.width * 2.2
+                height: parent.height * 2.2
+                radius: width / 2
+                color: parent.color
+                opacity: 0.20
             }
 
             SequentialAnimation {
@@ -517,52 +594,80 @@ Item {
     // SCAN LINE
     // ==========================================================
 
-    Rectangle {
+    Item {
 
-        id: scanLine
+        anchors.fill: parent
 
-        width: root.width
+        // soft trailing glow behind the scan line
+        Rectangle {
 
-        height: root.state === "error" ? 2 : 1
+            width: root.width
 
-        y: -height
+            height: 46
 
-        color: root.stateColor
+            y: scanLine.y - height + (root.state === "error" ? 2 : 1)
 
-        opacity:
-            root.state === "idle"
-            ? 0.08
-            : 0.22 * root.stateIntensity
+            gradient: Gradient {
 
-        Behavior on color {
+                orientation: Gradient.Vertical
 
-            ColorAnimation {
-
-                duration: Theme.medium
+                GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0) }
+                GradientStop { position: 1.0; color: root.stateColor }
             }
+
+            opacity:
+                (root.state === "idle"
+                ? 0.08
+                : 0.22 * root.stateIntensity) * 0.5
         }
 
-        SequentialAnimation on y {
+        Rectangle {
 
-            running: root.animated
+            id: scanLine
 
-            loops: Animation.Infinite
+            width: root.width
 
-            NumberAnimation {
+            height: root.state === "error" ? 2 : 1
 
-                from: -2
+            y: -height
 
-                to: root.height + 2
+            color: root.stateColor
 
-                duration:
-                    7000 * root.animationSpeed
+            opacity:
+                root.state === "idle"
+                ? 0.08
+                : 0.22 * root.stateIntensity
 
-                easing.type: Easing.Linear
+            Behavior on color {
+
+                ColorAnimation {
+
+                    duration: Theme.medium
+                }
             }
 
-            PauseAnimation {
+            SequentialAnimation on y {
 
-                duration: 700
+                running: root.animated
+
+                loops: Animation.Infinite
+
+                NumberAnimation {
+
+                    from: -2
+
+                    to: root.height + 2
+
+                    duration:
+                        7000 * root.animationSpeed
+
+                    easing.type: Easing.Linear
+                }
+
+                PauseAnimation {
+
+                    duration: 700
+                }
             }
         }
     }
@@ -648,4 +753,3 @@ Item {
         }
     }
 }
-
