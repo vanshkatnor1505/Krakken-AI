@@ -40,7 +40,7 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urljoin, urlparse
-from urllib.request import Request, build_opener
+from urllib.request import Request, urlopen
 
 from core.tools.models import (
     ToolCall,
@@ -799,9 +799,7 @@ class WebSearchTool(Tool):
             ssl.create_default_context()
         )
 
-        opener = build_opener()
-
-        with opener.open(
+        with urlopen(
             request,
             timeout=self._TIMEOUT,
             context=ssl_context,
