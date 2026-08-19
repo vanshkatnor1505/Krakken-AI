@@ -177,6 +177,15 @@ ApplicationWindow {
                             case "processing":
                                 return "PROCESSING"
 
+                            case "recording":
+                                return "RECORDING"
+
+                            case "generating":
+                                return "GENERATING"
+
+                            case "tool":
+                                return "USING TOOL"
+
                             case "speaking":
                                 return "SPEAKING"
 
@@ -200,6 +209,15 @@ ApplicationWindow {
                                 return Theme.accentPurple
 
                             case "processing":
+                                return Theme.warning
+
+                            case "recording":
+                                return Theme.accentGreen
+
+                            case "generating":
+                                return Theme.accent
+
+                            case "tool":
                                 return Theme.warning
 
                             case "speaking":
@@ -383,6 +401,19 @@ ApplicationWindow {
                             "error"
                     }
                 }
+
+                onMicrophoneToggled: function(startRecording) {
+
+                    if (!window.bridge) {
+                        return
+                    }
+
+                    if (startRecording) {
+                        window.bridge.startVoiceInput()
+                    } else {
+                        window.bridge.stopVoiceInput()
+                    }
+                }
             }
         }
 
@@ -510,6 +541,43 @@ ApplicationWindow {
             chatView.finishStreaming()
         }
 
+
+        // ======================================================
+        // VOICE TRANSCRIPT
+        // ======================================================
+
+        function onTranscriptReady(transcript) {
+
+            if (
+                transcript === undefined ||
+                transcript === null
+            ) {
+                return
+            }
+
+            var spokenText =
+                String(transcript).trim()
+
+            if (spokenText.length === 0) {
+                return
+            }
+
+            chatView.addUserMessage(
+                spokenText
+            )
+
+            if (window.bridge) {
+
+                console.log(
+                    "MAIN: Sending transcript to AssistantBridge:",
+                    spokenText
+                )
+
+                window.bridge.sendMessage(
+                    spokenText
+                )
+            }
+        }
 
         // ======================================================
         // ERROR
