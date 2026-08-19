@@ -1,4 +1,3 @@
-
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -15,9 +14,14 @@ Item {
 
     property string state: "idle"
 
-    property string placeholderText: "Ask Krakken anything..."
+    property string placeholderText:
+        root.state === "recording"
+        ? "Listening..."
+        : "Ask Krakken anything..."
 
     signal commandSubmitted(string command)
+
+    signal microphoneToggled(bool startRecording)
 
     // ==========================================================
     // SIZE
@@ -42,6 +46,9 @@ Item {
 
         case "processing":
             return Theme.warning
+
+        case "recording":
+            return Theme.accentGreen
 
         case "speaking":
             return Theme.accent
@@ -333,11 +340,9 @@ Item {
                     cursorShape: Qt.PointingHandCursor
 
                     onClicked: {
-
-                        root.state =
-                            root.state === "listening"
-                            ? "idle"
-                            : "listening"
+                        root.microphoneToggled(
+                            root.state !== "recording"
+                        )
                     }
                 }
             }
