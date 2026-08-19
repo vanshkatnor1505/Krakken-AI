@@ -69,6 +69,9 @@ Item {
         case "processing":
             return Theme.warning
 
+        case "recording":
+            return Theme.accentGreen
+
         case "speaking":
             return Theme.accent
 
@@ -549,15 +552,6 @@ Item {
                                 root.clearMessages()
 
                                 root.clearRequested()
-
-
-                                if (
-                                    root.assistantBridge
-                                ) {
-
-                                    root.assistantBridge
-                                        .clearConversation()
-                                }
                             }
                         }
 
@@ -1049,14 +1043,18 @@ Item {
 
                     height:
                         root.state === "thinking" ||
-                        root.state === "processing"
+                        root.state === "processing" ||
+                        root.state === "generating" ||
+                        root.state === "tool"
                         ? 44
                         : 0
 
 
                     visible:
                         root.state === "thinking" ||
-                        root.state === "processing"
+                        root.state === "processing" ||
+                        root.state === "generating" ||
+                        root.state === "tool"
 
 
                     Row {
@@ -1078,8 +1076,11 @@ Item {
                         Text {
 
                             text:
-                                root.state === "processing"
+                                root.state === "processing" ||
+                                root.state === "tool"
                                 ? "PROCESSING"
+                                : root.state === "generating"
+                                ? "GENERATING"
                                 : "THINKING"
 
 
@@ -1696,6 +1697,15 @@ Item {
 
         case "processing":
             return "PROCESSING TASK"
+
+        case "recording":
+            return "RECORDING"
+
+        case "generating":
+            return "GENERATING RESPONSE"
+
+        case "tool":
+            return "USING TOOL"
 
         case "speaking":
             return "GENERATING RESPONSE"
